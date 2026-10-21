@@ -1,0 +1,117 @@
+use crate::arena::{Arena, Handle, Range, UniqueArena};
+
+type Index = std::num::NonZeroU32;
+
+pub struct HandleSet<T> {
+    len: usize,
+
+    members: bit_set::BitSet,
+
+    as_keys: std::marker::PhantomData<T>,
+}
+
+impl<T> HandleSet<T> {
+    pub fn for_arena(arena: &impl ArenaType<T>) -> Self {
+        let len = arena.len();
+        Self {
+            len,
+            members: bit_set::BitSet::with_capacity(len),
+            as_keys: std::marker::PhantomData,
+        }
+    }
+
+    pub fn insert(&mut self, handle: Handle<T>) {
+        self.members.insert(handle.index());
+    }
+
+    pub fn insert_iter(&mut self, iter: impl IntoIterator<Item = Handle<T>>) {
+        for handle in iter {
+            self.insert(handle);
+        }
+    }
+
+    pub fn contains(&self, handle: Handle<T>) -> bool {
+        self.members.contains(handle.index())
+    }
+}
+
+pub trait ArenaType<T> {
+    fn len(&self) -> usize;
+}
+
+impl<T> ArenaType<T> for Arena<T> {
+    fn len(&self) -> usize {
+        self.len()
+    }
+}
+
+impl<T: std::hash::Hash + Eq> ArenaType<T> for UniqueArena<T> {
+    fn len(&self) -> usize {
+        self.len()
+    }
+}
+
+pub struct HandleMap<T> {
+    new_index: Vec<Option<Index>>,
+
+    as_keys: std::marker::PhantomData<T>,
+}
+
+impl<T: 'static> HandleMap<T> {
+    pub fn from_set(set: HandleSet<T>) -> Self {
+        let mut next_index = Index::new(1).unwrap();
+        Self {
+            new_index: (0..set.len)
+                .map(|zero_based_index| {
+                    if set.members.contains(zero_based_index) {
+                        let this = next_index;
+                        next_index = next_index.checked_add(1).unwrap();
+                        Some(this)
+                    } else {
+                        None
+                    }
+                })
+                .collect(),
+            as_keys: std::marker::PhantomData,
+        }
+    }
+
+    pub fn used(&self, old: Handle<T>) -> bool {
+        self.new_index[old.index()].is_some()
+    }
+
+    pub fn try_adjust(&self, old: Handle<T>) -> Option<Handle<T>> {
+        log::trace!(
+            "adjusting {} handle [{}] -> [{:?}]",
+            std::any::type_name::<T>(),
+            old.index() + 1,
+            self.new_index[old.index()]
+        );
+        self.new_index[old.index()].map(Handle::new)
+    }
+
+    pub fn adjust(&self, handle: &mut Handle<T>) {
+        *handle = self.try_adjust(*handle).unwrap();
+    }
+
+    pub fn adjust_option(&self, handle: &mut Option<Handle<T>>) {
+        if let Some(ref mut handle) = *handle {
+            self.adjust(handle);
+        }
+    }
+
+    pub fn adjust_range(&self, range: &mut Range<T>, compacted_arena: &Arena<T>) {
+        let mut index_range = range.zero_based_index_range();
+        let compacted;
+        if let Some(first1) = index_range.find_map(|i| self.new_index[i as usize]) {
+            if let Some(last1) = index_range.rev().find_map(|i| self.new_index[i as usize]) {
+                compacted = first1.get() - 1..last1.get();
+            } else {
+                compacted = first1.get() - 1..first1.get();
+            }
+        } else {
+            compacted = 0..0;
+        };
+        *range = Range::from_zero_based_index_range(compacted, compacted_arena);
+    }
+}

@@ -1,0 +1,53 @@
+Eltharn attribution and source records
+
+Original Eltharn code uses the project LICENSE at the workspace root.
+Publisher: https://github.com/shtefan4079
+Contact: Eltharn145@gmail.com
+
+Third-party components retain their own licenses. Vendor directories contain
+their original license texts and patch records. vendor/dependency-notices.json
+retains supplemental license texts, attribution, source URLs and checksums;
+project provenance records are identified separately from license terms.
+
+Vendored source:
+- Azalea chat/inventory: MIT, upstream revision
+  41a9ae6aaff77646c08c64ac1334a8cc6081c24f. See
+  crates/el_protocol_1_21_11/vendor/*/{LICENSE,NOTICE.txt}.
+- simdnbt: MIT. See vendor/simdnbt/LICENSE.
+- The simdnbt fork changes are recorded in vendor/simdnbt/ELTHARN_FORK.md.
+- naga 0.19.2 and wgpu-hal 0.19.5: MIT OR Apache-2.0.
+  See their retained licenses and ELTHARN_PATCH.md files.
+- cfg_aliases 0.1.1: MIT. See vendor/cfg_aliases-0.1.1/ELTHARN_PATCH.md.
+- vendor/socks5-compat is original Eltharn adapter code using MIT tokio-socks;
+  it contains no implementation from the GPL socks5-impl package.
+
+Data and resources:
+- The Azalea-derived collision table retains the MIT license and attribution
+  in crates/el_core/data. The exact upstream source revision is unknown;
+  source hashes remain recorded there and in src/generated/PROVENANCE.txt.
+- Compatibility tables describe Java 26.2. Their source mappings and hashes
+  remain beside the generated Rust files and the retained Rust generators.
+  The maintained wire backend separately targets 1.21.11.
+- The piston push-reaction snapshot is
+  crates/el_client/src/world/piston_push_reactions.rs: 342 non-default block
+  paths from an optional Java 26.2 input with SHA-256
+  ab76053a9be6673631971fb4a972592f79aba8b9f78c24db3e26c42f335b1039.
+  Unlisted paths use NORMAL. Regeneration reads
+  src/world/piston_push_reaction.csv, which is not included in the product.
+- KEMAR measured audio responses retain the original authors' permission and
+  citation in crates/el_client/src/client/audio/hrtf_data/NOTICE.txt.
+- The in-game mods icon keeps its editable SVG source beside the embedded PNG
+  in crates/el_client/assets/icons.
+- The modified web COOP/COEP worker retains Guido Zuidhof's MIT license and
+  source attribution in apps/el_web/NOTICE.txt.
+- The Android Gradle wrapper retains Apache-2.0 terms and artifact provenance
+  in apps/el_android/android/gradle/wrapper.
+- Project icon sources and their derived platform files are identified by
+  their SVG sources and EltharnGate/assets/icons/NOTICE.txt.
+
+Minecraft reference trees and downloaded game assets are not distributed in
+this source tree. The project license does not license Mojang/Microsoft assets
+or trademarks. Reference material was used for compatibility work.
+
+NOT AN OFFICIAL MINECRAFT PRODUCT. NOT APPROVED BY OR ASSOCIATED WITH MOJANG
+OR MICROSOFT.

@@ -1,0 +1,24 @@
+Azalea collision source retained by Eltharn
+
+File: azalea_blocks.rs
+Upstream project: https://github.com/azalea-rs/azalea
+Upstream path: azalea-physics/src/collision/blocks.rs
+Copyright (c) 2022 mat
+License: MIT; see LICENSE.azalea in this directory.
+
+The retained file is byte-identical to the local Azalea 0.16.0+mc26.2
+snapshot inspected on 2026-10-20. Its SHA-256 is:
+b8ad8f37f1a58d9570f42c428285ff32a2b09943d948d10cc4bf2d8aaaa3621c
+
+The exact upstream base commit of that local snapshot is not recorded.
+Do not substitute the separate 1.21.11 backend revision as its provenance.
+Eltharn's source-available license does not replace the upstream MIT license.
+
+The optional el_core example regenerate_vanilla_tables reads collision shape
+declarations from this source. Normal builds consume the derived Rust table
+src/generated/generated_collision_shapes.rs without reading this input file.
+Keep this notice and LICENSE.azalea with that derived source.
+
+The other files in this directory have separate versioned-data provenance
+in src/generated/PROVENANCE.txt. The Azalea license notice does not assign
+a license or redistribution permission to those independent inputs.

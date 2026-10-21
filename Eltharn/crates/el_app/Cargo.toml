@@ -1,0 +1,10 @@
+[package]
+name = "el_app"
+version = "0.1.0"
+edition = "2024"
+description = "Platform-neutral Eltharn application lifecycle reducer"
+license.workspace = true
+
+[dependencies]
+el_launcher_core = { path = "../el_launcher_core" }
+el_platform_api = { path = "../el_platform_api" }

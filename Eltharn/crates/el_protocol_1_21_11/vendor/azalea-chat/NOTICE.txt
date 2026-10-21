@@ -1,0 +1,15 @@
+Azalea chat source vendored from upstream revision
+41a9ae6aaff77646c08c64ac1334a8cc6081c24f (Minecraft 1.21.11 branch).
+Upstream repository: https://github.com/azalea-rs/azalea
+The original MIT license is retained in LICENSE.
+
+Eltharn changes: standalone Cargo dependency declarations, support for legacy
+plugin `clickEvent` style fields next to the canonical 1.21.11 `click_event`
+fields, a privacy-safe RawComponentInteractionProbe (structural style-field
+counts only; no text, URLs, commands or custom NBT retained). Upstream test
+sources are omitted from the product source tree. No account data or generated
+game captures included.
+
+This component remains under the upstream MIT license; the Eltharn
+non-commercial license does not apply to it. See the workspace LICENSE and
+third-party notice records.

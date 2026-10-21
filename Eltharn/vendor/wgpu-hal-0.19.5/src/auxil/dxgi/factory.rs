@@ -1,0 +1,220 @@
+use winapi::{
+    shared::{dxgi, dxgi1_2, dxgi1_4, dxgi1_6, winerror},
+    Interface,
+};
+
+use super::result::HResult as _;
+
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum DxgiFactoryType {
+    Factory2,
+    Factory4,
+    Factory6,
+}
+
+fn should_keep_adapter(adapter: &dxgi::IDXGIAdapter1) -> bool {
+    let mut desc = unsafe { std::mem::zeroed() };
+    unsafe { adapter.GetDesc1(&mut desc) };
+
+    let haswell_device_ids = [
+        0x0422, 0x0426, 0x042A, 0x042B, 0x042E, 0x0C22, 0x0C26, 0x0C2A, 0x0C2B, 0x0C2E, 0x0A22,
+        0x0A2A, 0x0A2B, 0x0D2A, 0x0D2B, 0x0D2E, 0x0A26, 0x0A2E, 0x0D22, 0x0D26, 0x0412, 0x0416,
+        0x0D12, 0x041A, 0x041B, 0x0C12, 0x0C16, 0x0C1A, 0x0C1B, 0x0C1E, 0x0A12, 0x0A1A, 0x0A1B,
+        0x0D16, 0x0D1A, 0x0D1B, 0x0D1E, 0x041E, 0x0A16, 0x0A1E, 0x0402, 0x0406, 0x040A, 0x040B,
+        0x040E, 0x0C02, 0x0C06, 0x0C0A, 0x0C0B, 0x0C0E, 0x0A02, 0x0A06, 0x0A0A, 0x0A0B, 0x0A0E,
+        0x0D02, 0x0D06, 0x0D0A, 0x0D0B, 0x0D0E,
+    ];
+    if desc.VendorId == 0x8086 && haswell_device_ids.contains(&desc.DeviceId) {
+        return false;
+    }
+
+    if desc.VendorId == 5140 && (desc.Flags & dxgi::DXGI_ADAPTER_FLAG_SOFTWARE) == 0 {
+        let adapter_name = super::conv::map_adapter_name(desc.Description);
+        if adapter_name.contains("Microsoft Basic Render Driver") {
+            return false;
+        }
+    }
+
+    true
+}
+
+pub fn enumerate_adapters(factory: d3d12::DxgiFactory) -> Vec<d3d12::DxgiAdapter> {
+    let mut adapters = Vec::with_capacity(8);
+
+    for cur_index in 0.. {
+        if let Some(factory6) = factory.as_factory6() {
+            profiling::scope!("IDXGIFactory6::EnumAdapterByGpuPreference");
+            let mut adapter4 = d3d12::ComPtr::<dxgi1_6::IDXGIAdapter4>::null();
+            let hr = unsafe {
+                factory6.EnumAdapterByGpuPreference(
+                    cur_index,
+                    dxgi1_6::DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE,
+                    &dxgi1_6::IDXGIAdapter4::uuidof(),
+                    adapter4.mut_void(),
+                )
+            };
+
+            if hr == winerror::DXGI_ERROR_NOT_FOUND {
+                break;
+            }
+            if let Err(err) = hr.into_result() {
+                log::error!("Failed enumerating adapters: {}", err);
+                break;
+            }
+
+            if !should_keep_adapter(&adapter4) {
+                continue;
+            }
+
+            adapters.push(d3d12::DxgiAdapter::Adapter4(adapter4));
+            continue;
+        }
+
+        profiling::scope!("IDXGIFactory1::EnumAdapters1");
+        let mut adapter1 = d3d12::ComPtr::<dxgi::IDXGIAdapter1>::null();
+        let hr = unsafe { factory.EnumAdapters1(cur_index, adapter1.mut_self()) };
+
+        if hr == winerror::DXGI_ERROR_NOT_FOUND {
+            break;
+        }
+        if let Err(err) = hr.into_result() {
+            log::error!("Failed enumerating adapters: {}", err);
+            break;
+        }
+
+        if !should_keep_adapter(&adapter1) {
+            continue;
+        }
+
+
+        unsafe {
+            match adapter1.cast::<dxgi1_4::IDXGIAdapter3>().into_result() {
+                Ok(adapter3) => {
+                    adapters.push(d3d12::DxgiAdapter::Adapter3(adapter3));
+                    continue;
+                }
+                Err(err) => {
+                    log::warn!("Failed casting Adapter1 to Adapter3: {}", err);
+                }
+            }
+        }
+
+        unsafe {
+            match adapter1.cast::<dxgi1_2::IDXGIAdapter2>().into_result() {
+                Ok(adapter2) => {
+                    adapters.push(d3d12::DxgiAdapter::Adapter2(adapter2));
+                    continue;
+                }
+                Err(err) => {
+                    log::warn!("Failed casting Adapter1 to Adapter2: {}", err);
+                }
+            }
+        }
+
+        adapters.push(d3d12::DxgiAdapter::Adapter1(adapter1));
+    }
+
+    adapters
+}
+
+pub fn create_factory(
+    required_factory_type: DxgiFactoryType,
+    instance_flags: wgt::InstanceFlags,
+) -> Result<(d3d12::DxgiLib, d3d12::DxgiFactory), crate::InstanceError> {
+    let lib_dxgi = d3d12::DxgiLib::new().map_err(|e| {
+        crate::InstanceError::with_source(String::from("failed to load dxgi.dll"), e)
+    })?;
+
+    let mut factory_flags = d3d12::FactoryCreationFlags::empty();
+
+    if instance_flags.contains(wgt::InstanceFlags::VALIDATION) {
+        match lib_dxgi.get_debug_interface1() {
+            Ok(pair) => match pair.into_result() {
+                Ok(_debug_controller) => {
+                    factory_flags |= d3d12::FactoryCreationFlags::DEBUG;
+                }
+                Err(err) => {
+                    log::warn!("Unable to enable DXGI debug interface: {}", err);
+                }
+            },
+            Err(err) => {
+                log::warn!("Debug interface function for DXGI not found: {:?}", err);
+            }
+        }
+
+        super::exception::register_exception_handler();
+    }
+
+    let factory4 = match lib_dxgi.create_factory2(factory_flags) {
+        Ok(pair) => match pair.into_result() {
+            Ok(factory) => Some(factory),
+            Err(err) => {
+                return Err(crate::InstanceError::new(format!(
+                    "failed to create IDXGIFactory4: {err:?}"
+                )));
+            }
+        },
+        Err(err) if required_factory_type == DxgiFactoryType::Factory4 => {
+            return Err(crate::InstanceError::with_source(
+                String::from("IDXGIFactory1 creation function not found"),
+                err,
+            ));
+        }
+        Err(err) => {
+            log::warn!("IDXGIFactory1 creation function not found: {err:?}");
+            None
+        }
+    };
+
+    if let Some(factory4) = factory4 {
+        let factory6 = unsafe { factory4.cast::<dxgi1_6::IDXGIFactory6>().into_result() };
+        match factory6 {
+            Ok(factory6) => {
+                return Ok((lib_dxgi, d3d12::DxgiFactory::Factory6(factory6)));
+            }
+            Err(err) if required_factory_type == DxgiFactoryType::Factory6 => {
+                return Err(crate::InstanceError::new(format!(
+                    "failed to cast IDXGIFactory4 to IDXGIFactory6: {err:?}"
+                )));
+            }
+            Err(err) => {
+                log::warn!("Failed to cast IDXGIFactory4 to IDXGIFactory6: {:?}", err);
+                return Ok((lib_dxgi, d3d12::DxgiFactory::Factory4(factory4)));
+            }
+        }
+    }
+
+    let factory1 = match lib_dxgi.create_factory1() {
+        Ok(pair) => match pair.into_result() {
+            Ok(factory) => factory,
+            Err(err) => {
+                return Err(crate::InstanceError::new(format!(
+                    "failed to create IDXGIFactory1: {err:?}"
+                )));
+            }
+        },
+        Err(err) => {
+            return Err(crate::InstanceError::with_source(
+                String::from("IDXGIFactory1 creation function not found"),
+                err,
+            ));
+        }
+    };
+
+    let factory2 = unsafe { factory1.cast::<dxgi1_2::IDXGIFactory2>().into_result() };
+    match factory2 {
+        Ok(factory2) => {
+            return Ok((lib_dxgi, d3d12::DxgiFactory::Factory2(factory2)));
+        }
+        Err(err) if required_factory_type == DxgiFactoryType::Factory2 => {
+            return Err(crate::InstanceError::new(format!(
+                "failed to cast IDXGIFactory1 to IDXGIFactory2: {err:?}"
+            )));
+        }
+        Err(err) => {
+            log::warn!("Failed to cast IDXGIFactory1 to IDXGIFactory2: {:?}", err);
+        }
+    }
+
+    Ok((lib_dxgi, d3d12::DxgiFactory::Factory1(factory1)))
+}

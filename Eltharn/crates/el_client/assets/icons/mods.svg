@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" shape-rendering="crispEdges">
+  <title>Mods</title>
+  
+  <path fill="#252a30" d="M5 1h5v3h3v3h2v5h-2v3H2V4h3z"/>
+  <path fill="#e7ecef" d="M6 1h3v4h3v3h3v3h-3v3H3V5h3z"/>
+  <path fill="#a6b2ba" d="M3 12h9v2H3zM12 9h3v2h-3z"/>
+  <path fill="#57d887" d="M3 8h4v4H3z"/>
+  <path fill="#e7ecef" d="M6 8h2v2H6z"/>
+</svg>

@@ -1,0 +1,18 @@
+[package]
+name = "el_web_gateway"
+version = "0.1.0"
+edition = "2024"
+description = "WebSocket gateway that bridges browser clients to a Eltharn protocol backend"
+license.workspace = true
+
+[[bin]]
+name = "eltharn_gate-gateway"
+path = "src/main.rs"
+
+[dependencies]
+futures-util = { version = "0.3.31", features = ["sink", "std"] }
+el_protocol_backend = { path = "../../crates/el_protocol_backend" }
+serde_json = "1.0"
+tokio = { version = "1.52.2", features = ["io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-tungstenite = { version = "0.24.0", default-features = true }
+uuid = "1.8"

@@ -1,0 +1,12 @@
+[package]
+name = "el_gui"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+
+[dependencies]
+el_core = { package = "el_core", path = "../el_core" }
+el_math = { package = "el_math", path = "../el_math" }
+serde_json = "1"
+uuid = "1"
+web-time = "1"

@@ -1,0 +1,25 @@
+[package]
+name = "el_mod_runtime"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+description = "Portable mod admission, lifecycle and bounded host services"
+
+[features]
+default = []
+native = []
+legacy-wasm = ["native", "dep:wasmtime"]
+
+[dependencies]
+el_extension_api = { path = "../el_extension_api" }
+el_mod_content = { path = "../el_mod_content" }
+el_strict_json = { path = "../el_strict_json" }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+semver = "1"
+wasmparser = "=0.244.0"
+sha2 = "0.11"
+rhai = { version = "=1.26.1", default-features = false, features = ["std", "sync", "serde", "internals", "no_closure", "no_time", "no_custom_syntax"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+wasmtime = { version = "=48.0.0", optional = true, default-features = false, features = ["std", "runtime", "cranelift"] }

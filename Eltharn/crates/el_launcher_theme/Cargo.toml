@@ -1,0 +1,8 @@
+[package]
+name = "el_launcher_theme"
+version = "0.1.0"
+edition = "2024"
+description = "Platform-neutral visual and layout tokens for the Eltharn EltharnGate launcher"
+license.workspace = true
+
+[dependencies]

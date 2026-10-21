@@ -1,0 +1,16 @@
+pub mod accessibility_options;
+pub mod chat_options;
+pub mod controls;
+pub mod game_rules;
+pub mod keybinds;
+pub mod language;
+pub mod mouse_settings;
+pub mod online_options;
+pub mod option_tooltips;
+pub mod options;
+pub mod resource_packs;
+pub mod restrictions;
+pub mod skin_customization;
+pub mod sound_options;
+pub mod video_settings;
+pub mod world_options;

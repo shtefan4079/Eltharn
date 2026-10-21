@@ -1,0 +1,30 @@
+Web build
+
+Run from the workspace root with the pinned Rust toolchain, rust-src,
+wasm32-unknown-unknown, Node.js and the wasm-bindgen CLI version in Cargo.lock:
+
+Export the actual deployed backend descriptors from a native Eltharn build:
+
+    cargo run --release --locked -p eltharn -- --print-backends > /tmp/eltharn-web-backends.json
+    ELTHARN_WEB_CONFIG=/tmp/eltharn-web-backends.json \
+      bash Eltharn/apps/el_web/build_wasm.sh
+    node Eltharn/apps/el_web/serve.js 8080 Eltharn/apps/el_web/dist
+
+Serve the output over HTTP(S) with COOP/COEP headers. Shared Wasm memory and
+the mod workers require cross-origin isolation. file:// is unsupported.
+
+Minecraft assets are not bundled. The current browser bootstrap needs a
+deployment resource provider for assets.zip; this is separate from the native
+downloader. The build never packages local Minecraft resources.
+
+ELTHARN_WEB_CONFIG may instead point to a deployment JSON object containing
+backend_manifests and optional default_protocol and gateway_url fields.
+Protocol, IPC and asset versions come from those descriptors;
+the browser checks them against its own compiled contracts before launching.
+
+Browser multiplayer requires the WebSocket gateway in ../el_web_gateway.
+On HTTPS, an unset gateway URL selects the same-origin /game endpoint.
+Browser status lookups use api.mcsrvstat.us and do not measure direct TCP ping.
+
+ZIP mods, profiles and settings are stored per browser origin. Rhai code runs
+in bounded workers. A Wasm build alone does not validate gameplay or every GPU.

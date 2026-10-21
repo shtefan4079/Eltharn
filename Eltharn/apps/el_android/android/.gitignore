@@ -1,0 +1,11 @@
+
+local.properties
+
+
+app/src/debug/jniLibs/
+app/src/release/jniLibs/
+
+
+.gradle/
+build/
+app/build/

@@ -1,0 +1,45 @@
+[package]
+name = "el_protocol_1_21_11"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+
+[[bin]]
+name = "eltharn-protocol"
+path = "src/main.rs"
+
+[dependencies]
+crossbeam-channel = "0.5"
+base64 = "0.22"
+log = "0.4"
+serde_json = "1.0"
+thiserror = "2.0"
+tokio = { version = "1.35", features = ["full"] }
+indexmap = "2.0"
+uuid = { version = "1.0", features = ["v4"] }
+url = "2"
+
+
+el_core = { path = "../el_core" }
+el_math = { path = "../el_math" }
+el_nbt = { path = "../el_nbt" }
+el_protocol = { path = "../el_protocol" }
+el_protocol_backend = { path = "../el_protocol_backend" }
+el_world = { path = "../el_world" }
+
+
+azalea-auth = { git = "https://github.com/azalea-rs/azalea", rev = "41a9ae6aaff77646c08c64ac1334a8cc6081c24f" }
+azalea-block = { git = "https://github.com/azalea-rs/azalea", rev = "41a9ae6aaff77646c08c64ac1334a8cc6081c24f" }
+azalea-buf = { git = "https://github.com/azalea-rs/azalea", rev = "41a9ae6aaff77646c08c64ac1334a8cc6081c24f" }
+azalea-chat = { git = "https://github.com/azalea-rs/azalea", rev = "41a9ae6aaff77646c08c64ac1334a8cc6081c24f" }
+azalea-core = { git = "https://github.com/azalea-rs/azalea", rev = "41a9ae6aaff77646c08c64ac1334a8cc6081c24f" }
+azalea-crypto = { git = "https://github.com/azalea-rs/azalea", rev = "41a9ae6aaff77646c08c64ac1334a8cc6081c24f" }
+azalea-entity = { git = "https://github.com/azalea-rs/azalea", rev = "41a9ae6aaff77646c08c64ac1334a8cc6081c24f" }
+azalea-inventory = { git = "https://github.com/azalea-rs/azalea", rev = "41a9ae6aaff77646c08c64ac1334a8cc6081c24f" }
+azalea-protocol = { git = "https://github.com/azalea-rs/azalea", rev = "41a9ae6aaff77646c08c64ac1334a8cc6081c24f" }
+azalea-registry = { git = "https://github.com/azalea-rs/azalea", rev = "41a9ae6aaff77646c08c64ac1334a8cc6081c24f" }
+azalea-world = { git = "https://github.com/azalea-rs/azalea", rev = "41a9ae6aaff77646c08c64ac1334a8cc6081c24f" }
+
+simdnbt = { git = "https://github.com/azalea-rs/simdnbt", rev = "4cc67bcd980c752b412beee0ea1192f502333bf0" }
+
+

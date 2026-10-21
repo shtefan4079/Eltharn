@@ -1,0 +1,1034 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#![allow(
+    clippy::new_without_default,
+    clippy::unneeded_field_pattern,
+    clippy::match_like_matches_macro,
+    clippy::collapsible_if,
+    clippy::derive_partial_eq_without_eq,
+    clippy::needless_borrowed_reference,
+    clippy::single_match
+)]
+#![warn(
+    trivial_casts,
+    trivial_numeric_casts,
+    unused_extern_crates,
+    unused_qualifications,
+    clippy::pattern_type_mismatch,
+    clippy::missing_const_for_fn,
+    clippy::rest_pat_in_fully_bound_structs,
+    clippy::match_wildcard_for_single_variants
+)]
+#![deny(clippy::exit)]
+#![cfg_attr(
+    not(test),
+    warn(
+        clippy::dbg_macro,
+        clippy::panic,
+        clippy::print_stderr,
+        clippy::print_stdout,
+        clippy::todo
+    )
+)]
+
+mod arena;
+pub mod back;
+mod block;
+#[cfg(feature = "compact")]
+pub mod compact;
+pub mod front;
+pub mod keywords;
+pub mod proc;
+mod span;
+pub mod valid;
+
+pub use crate::arena::{Arena, Handle, Range, UniqueArena};
+
+pub use crate::span::{SourceLocation, Span, SpanContext, WithSpan};
+#[cfg(feature = "arbitrary")]
+use arbitrary::Arbitrary;
+#[cfg(feature = "deserialize")]
+use serde::Deserialize;
+#[cfg(feature = "serialize")]
+use serde::Serialize;
+
+pub const BOOL_WIDTH: Bytes = 1;
+
+pub const ABSTRACT_WIDTH: Bytes = 8;
+
+pub type FastHashMap<K, T> = rustc_hash::FxHashMap<K, T>;
+pub type FastHashSet<K> = rustc_hash::FxHashSet<K>;
+
+pub type FastIndexSet<K> =
+    indexmap::IndexSet<K, std::hash::BuildHasherDefault<rustc_hash::FxHasher>>;
+
+pub type FastIndexMap<K, V> =
+    indexmap::IndexMap<K, V, std::hash::BuildHasherDefault<rustc_hash::FxHasher>>;
+
+pub(crate) type NamedExpressions = FastIndexMap<Handle<Expression>, String>;
+
+#[derive(Clone, Copy, Debug, Hash, Eq, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "serialize", derive(Serialize))]
+#[cfg_attr(feature = "deserialize", derive(Deserialize))]
+#[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
+pub struct EarlyDepthTest {
+    pub conservative: Option<ConservativeDepth>,
+}
+#[derive(Clone, Copy, Debug, Hash, Eq, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "serialize", derive(Serialize))]
+#[cfg_attr(feature = "deserialize", derive(Deserialize))]
+#[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
+pub enum ConservativeDepth {
+    GreaterEqual,
+
+    LessEqual,
+
+    Unchanged,
+}
+
+#[derive(Clone, Copy, Debug, Hash, Eq, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "serialize", derive(Serialize))]
+#[cfg_attr(feature = "deserialize", derive(Deserialize))]
+#[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
+#[allow(missing_docs)]                              
+pub enum ShaderStage {
+    Vertex,
+    Fragment,
+    Compute,
+}
+
+#[derive(Clone, Copy, Debug, Hash, Eq, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "serialize", derive(Serialize))]
+#[cfg_attr(feature = "deserialize", derive(Deserialize))]
+#[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
+pub enum AddressSpace {
+    Function,
+    Private,
+    WorkGroup,
+    Uniform,
+    Storage { access: StorageAccess },
+    Handle,
+    PushConstant,
+}
+
+#[derive(Clone, Copy, Debug, Hash, Eq, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "serialize", derive(Serialize))]
+#[cfg_attr(feature = "deserialize", derive(Deserialize))]
+#[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
+pub enum BuiltIn {
+    Position { invariant: bool },
+    ViewIndex,
+    BaseInstance,
+    BaseVertex,
+    ClipDistance,
+    CullDistance,
+    InstanceIndex,
+    PointSize,
+    VertexIndex,
+    FragDepth,
+    PointCoord,
+    FrontFacing,
+    PrimitiveIndex,
+    SampleIndex,
+    SampleMask,
+    GlobalInvocationId,
+    LocalInvocationId,
+    LocalInvocationIndex,
+    WorkGroupId,
+    WorkGroupSize,
+    NumWorkGroups,
+}
+
+pub type Bytes = u8;
+
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, Hash, Eq, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "serialize", derive(Serialize))]
+#[cfg_attr(feature = "deserialize", derive(Deserialize))]
+#[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
+pub enum VectorSize {
+    Bi = 2,
+    Tri = 3,
+    Quad = 4,
+}
+
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, Hash, Eq, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "serialize", derive(Serialize))]
+#[cfg_attr(feature = "deserialize", derive(Deserialize))]
+#[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
+pub enum ScalarKind {
+    Sint,
+    Uint,
+    Float,
+    Bool,
+
+    AbstractInt,
+
+    AbstractFloat,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serialize", derive(Serialize))]
+#[cfg_attr(feature = "deserialize", derive(Deserialize))]
+#[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
+pub struct Scalar {
+    pub kind: ScalarKind,
+
+    pub width: Bytes,
+}
+
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, Hash, Eq, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "serialize", derive(Serialize))]
+#[cfg_attr(feature = "deserialize", derive(Deserialize))]
+#[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
+pub enum ArraySize {
+    Constant(std::num::NonZeroU32),
+    Dynamic,
+}
+
+#[derive(Clone, Copy, Debug, Hash, Eq, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "serialize", derive(Serialize))]
+#[cfg_attr(feature = "deserialize", derive(Deserialize))]
+#[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
+pub enum Interpolation {
+    Perspective,
+    Linear,
+    Flat,
+}
+
+#[derive(Clone, Copy, Debug, Hash, Eq, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "serialize", derive(Serialize))]
+#[cfg_attr(feature = "deserialize", derive(Deserialize))]
+#[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
+pub enum Sampling {
+    Center,
+
+    Centroid,
+
+    Sample,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[cfg_attr(feature = "serialize", derive(Serialize))]
+#[cfg_attr(feature = "deserialize", derive(Deserialize))]
+#[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
+pub struct StructMember {
+    pub name: Option<String>,
+    pub ty: Handle<Type>,
+    pub binding: Option<Binding>,
+    pub offset: u32,
+}
+
+#[derive(Clone, Copy, Debug, Hash, Eq, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "serialize", derive(Serialize))]
+#[cfg_attr(feature = "deserialize", derive(Deserialize))]
+#[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
+pub enum ImageDimension {
+    D1,
+    D2,
+    D3,
+    Cube,
+}
+
+bitflags::bitflags! {
+    #[cfg_attr(feature = "serialize", derive(Serialize))]
+    #[cfg_attr(feature = "deserialize", derive(Deserialize))]
+    #[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
+    #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+    pub struct StorageAccess: u32 {
+        const LOAD = 0x1;
+        const STORE = 0x2;
+    }
+}
+
+#[derive(Clone, Copy, Debug, Hash, Eq, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "serialize", derive(Serialize))]
+#[cfg_attr(feature = "deserialize", derive(Deserialize))]
+#[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
+pub enum StorageFormat {
+    R8Unorm,
+    R8Snorm,
+    R8Uint,
+    R8Sint,
+
+    R16Uint,
+    R16Sint,
+    R16Float,
+    Rg8Unorm,
+    Rg8Snorm,
+    Rg8Uint,
+    Rg8Sint,
+
+    R32Uint,
+    R32Sint,
+    R32Float,
+    Rg16Uint,
+    Rg16Sint,
+    Rg16Float,
+    Rgba8Unorm,
+    Rgba8Snorm,
+    Rgba8Uint,
+    Rgba8Sint,
+    Bgra8Unorm,
+
+    Rgb10a2Uint,
+    Rgb10a2Unorm,
+    Rg11b10Float,
+
+    Rg32Uint,
+    Rg32Sint,
+    Rg32Float,
+    Rgba16Uint,
+    Rgba16Sint,
+    Rgba16Float,
+
+    Rgba32Uint,
+    Rgba32Sint,
+    Rgba32Float,
+
+    R16Unorm,
+    R16Snorm,
+    Rg16Unorm,
+    Rg16Snorm,
+    Rgba16Unorm,
+    Rgba16Snorm,
+}
+
+#[derive(Clone, Copy, Debug, Hash, Eq, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "serialize", derive(Serialize))]
+#[cfg_attr(feature = "deserialize", derive(Deserialize))]
+#[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
+pub enum ImageClass {
+    Sampled {
+        kind: ScalarKind,
+        multi: bool,
+    },
+    Depth {
+        multi: bool,
+    },
+    Storage {
+        format: StorageFormat,
+        access: StorageAccess,
+    },
+}
+
+#[derive(Debug, Eq, Hash, PartialEq)]
+#[cfg_attr(feature = "clone", derive(Clone))]
+#[cfg_attr(feature = "serialize", derive(Serialize))]
+#[cfg_attr(feature = "deserialize", derive(Deserialize))]
+#[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
+pub struct Type {
+    pub name: Option<String>,
+    pub inner: TypeInner,
+}
+
+#[derive(Debug, Eq, Hash, PartialEq)]
+#[cfg_attr(feature = "clone", derive(Clone))]
+#[cfg_attr(feature = "serialize", derive(Serialize))]
+#[cfg_attr(feature = "deserialize", derive(Deserialize))]
+#[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
+pub enum TypeInner {
+    Scalar(Scalar),
+    Vector { size: VectorSize, scalar: Scalar },
+    Matrix {
+        columns: VectorSize,
+        rows: VectorSize,
+        scalar: Scalar,
+    },
+    Atomic(Scalar),
+    Pointer {
+        base: Handle<Type>,
+        space: AddressSpace,
+    },
+
+    ValuePointer {
+        size: Option<VectorSize>,
+        scalar: Scalar,
+        space: AddressSpace,
+    },
+
+    Array {
+        base: Handle<Type>,
+        size: ArraySize,
+        stride: u32,
+    },
+
+    Struct {
+        members: Vec<StructMember>,
+        span: u32,
+    },
+    Image {
+        dim: ImageDimension,
+        arrayed: bool,
+        class: ImageClass,
+    },
+    Sampler { comparison: bool },
+
+    AccelerationStructure,
+
+    RayQuery,
+
+    BindingArray { base: Handle<Type>, size: ArraySize },
+}
+
+#[derive(Debug, Clone, Copy, PartialOrd)]
+#[cfg_attr(feature = "serialize", derive(Serialize))]
+#[cfg_attr(feature = "deserialize", derive(Deserialize))]
+#[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
+pub enum Literal {
+    F64(f64),
+    F32(f32),
+    U32(u32),
+    I32(i32),
+    I64(i64),
+    Bool(bool),
+    AbstractInt(i64),
+    AbstractFloat(f64),
+}
+
+#[derive(Debug, PartialEq)]
+#[cfg_attr(feature = "clone", derive(Clone))]
+#[cfg_attr(feature = "serialize", derive(Serialize))]
+#[cfg_attr(feature = "deserialize", derive(Deserialize))]
+#[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
+pub enum Override {
+    None,
+    ByName,
+    ByNameOrId(u32),
+}
+
+#[derive(Debug, PartialEq)]
+#[cfg_attr(feature = "clone", derive(Clone))]
+#[cfg_attr(feature = "serialize", derive(Serialize))]
+#[cfg_attr(feature = "deserialize", derive(Deserialize))]
+#[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
+pub struct Constant {
+    pub name: Option<String>,
+    pub r#override: Override,
+    pub ty: Handle<Type>,
+
+    pub init: Handle<Expression>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[cfg_attr(feature = "serialize", derive(Serialize))]
+#[cfg_attr(feature = "deserialize", derive(Deserialize))]
+#[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
+pub enum Binding {
+    BuiltIn(BuiltIn),
+
+    Location {
+        location: u32,
+        second_blend_source: bool,
+        interpolation: Option<Interpolation>,
+        sampling: Option<Sampling>,
+    },
+}
+
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "serialize", derive(Serialize))]
+#[cfg_attr(feature = "deserialize", derive(Deserialize))]
+#[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
+pub struct ResourceBinding {
+    pub group: u32,
+    pub binding: u32,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serialize", derive(Serialize))]
+#[cfg_attr(feature = "deserialize", derive(Deserialize))]
+#[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
+pub struct GlobalVariable {
+    pub name: Option<String>,
+    pub space: AddressSpace,
+    pub binding: Option<ResourceBinding>,
+    pub ty: Handle<Type>,
+    pub init: Option<Handle<Expression>>,
+}
+
+#[derive(Clone, Debug)]
+#[cfg_attr(feature = "serialize", derive(Serialize))]
+#[cfg_attr(feature = "deserialize", derive(Deserialize))]
+#[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
+pub struct LocalVariable {
+    pub name: Option<String>,
+    pub ty: Handle<Type>,
+    pub init: Option<Handle<Expression>>,
+}
+
+#[derive(Clone, Copy, Debug, Hash, Eq, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "serialize", derive(Serialize))]
+#[cfg_attr(feature = "deserialize", derive(Deserialize))]
+#[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
+pub enum UnaryOperator {
+    Negate,
+    LogicalNot,
+    BitwiseNot,
+}
+
+#[derive(Clone, Copy, Debug, Hash, Eq, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "serialize", derive(Serialize))]
+#[cfg_attr(feature = "deserialize", derive(Deserialize))]
+#[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
+pub enum BinaryOperator {
+    Add,
+    Subtract,
+    Multiply,
+    Divide,
+    Modulo,
+    Equal,
+    NotEqual,
+    Less,
+    LessEqual,
+    Greater,
+    GreaterEqual,
+    And,
+    ExclusiveOr,
+    InclusiveOr,
+    LogicalAnd,
+    LogicalOr,
+    ShiftLeft,
+    ShiftRight,
+}
+
+#[derive(Clone, Copy, Debug, Hash, Eq, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "serialize", derive(Serialize))]
+#[cfg_attr(feature = "deserialize", derive(Deserialize))]
+#[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
+pub enum AtomicFunction {
+    Add,
+    Subtract,
+    And,
+    ExclusiveOr,
+    InclusiveOr,
+    Min,
+    Max,
+    Exchange { compare: Option<Handle<Expression>> },
+}
+
+#[derive(Clone, Copy, Debug, Hash, Eq, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "serialize", derive(Serialize))]
+#[cfg_attr(feature = "deserialize", derive(Deserialize))]
+#[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
+pub enum DerivativeControl {
+    Coarse,
+    Fine,
+    None,
+}
+
+#[derive(Clone, Copy, Debug, Hash, Eq, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "serialize", derive(Serialize))]
+#[cfg_attr(feature = "deserialize", derive(Deserialize))]
+#[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
+pub enum DerivativeAxis {
+    X,
+    Y,
+    Width,
+}
+
+#[derive(Clone, Copy, Debug, Hash, Eq, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "serialize", derive(Serialize))]
+#[cfg_attr(feature = "deserialize", derive(Deserialize))]
+#[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
+pub enum RelationalFunction {
+    All,
+    Any,
+    IsNan,
+    IsInf,
+}
+
+#[derive(Clone, Copy, Debug, Hash, Eq, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "serialize", derive(Serialize))]
+#[cfg_attr(feature = "deserialize", derive(Deserialize))]
+#[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
+pub enum MathFunction {
+    Abs,
+    Min,
+    Max,
+    Clamp,
+    Saturate,
+    Cos,
+    Cosh,
+    Sin,
+    Sinh,
+    Tan,
+    Tanh,
+    Acos,
+    Asin,
+    Atan,
+    Atan2,
+    Asinh,
+    Acosh,
+    Atanh,
+    Radians,
+    Degrees,
+    Ceil,
+    Floor,
+    Round,
+    Fract,
+    Trunc,
+    Modf,
+    Frexp,
+    Ldexp,
+    Exp,
+    Exp2,
+    Log,
+    Log2,
+    Pow,
+    Dot,
+    Outer,
+    Cross,
+    Distance,
+    Length,
+    Normalize,
+    FaceForward,
+    Reflect,
+    Refract,
+    Sign,
+    Fma,
+    Mix,
+    Step,
+    SmoothStep,
+    Sqrt,
+    InverseSqrt,
+    Inverse,
+    Transpose,
+    Determinant,
+    CountTrailingZeros,
+    CountLeadingZeros,
+    CountOneBits,
+    ReverseBits,
+    ExtractBits,
+    InsertBits,
+    FindLsb,
+    FindMsb,
+    Pack4x8snorm,
+    Pack4x8unorm,
+    Pack2x16snorm,
+    Pack2x16unorm,
+    Pack2x16float,
+    Unpack4x8snorm,
+    Unpack4x8unorm,
+    Unpack2x16snorm,
+    Unpack2x16unorm,
+    Unpack2x16float,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "serialize", derive(Serialize))]
+#[cfg_attr(feature = "deserialize", derive(Deserialize))]
+#[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
+pub enum SampleLevel {
+    Auto,
+    Zero,
+    Exact(Handle<Expression>),
+    Bias(Handle<Expression>),
+    Gradient {
+        x: Handle<Expression>,
+        y: Handle<Expression>,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "serialize", derive(Serialize))]
+#[cfg_attr(feature = "deserialize", derive(Deserialize))]
+#[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
+pub enum ImageQuery {
+    Size {
+        level: Option<Handle<Expression>>,
+    },
+    NumLevels,
+    NumLayers,
+    NumSamples,
+}
+
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "serialize", derive(Serialize))]
+#[cfg_attr(feature = "deserialize", derive(Deserialize))]
+#[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
+pub enum SwizzleComponent {
+    X = 0,
+    Y = 1,
+    Z = 2,
+    W = 3,
+}
+
+bitflags::bitflags! {
+    #[cfg_attr(feature = "serialize", derive(Serialize))]
+    #[cfg_attr(feature = "deserialize", derive(Deserialize))]
+    #[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
+    #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+    pub struct Barrier: u32 {
+        const STORAGE = 0x1;
+        const WORK_GROUP = 0x2;
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serialize", derive(Serialize))]
+#[cfg_attr(feature = "deserialize", derive(Deserialize))]
+#[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
+pub enum Expression {
+    Literal(Literal),
+    Constant(Handle<Constant>),
+    ZeroValue(Handle<Type>),
+    Compose {
+        ty: Handle<Type>,
+        components: Vec<Handle<Expression>>,
+    },
+
+    Access {
+        base: Handle<Expression>,
+        index: Handle<Expression>,
+    },
+    AccessIndex {
+        base: Handle<Expression>,
+        index: u32,
+    },
+    Splat {
+        size: VectorSize,
+        value: Handle<Expression>,
+    },
+    Swizzle {
+        size: VectorSize,
+        vector: Handle<Expression>,
+        pattern: [SwizzleComponent; 4],
+    },
+
+    FunctionArgument(u32),
+
+    GlobalVariable(Handle<GlobalVariable>),
+
+    LocalVariable(Handle<LocalVariable>),
+
+    Load { pointer: Handle<Expression> },
+    ImageSample {
+        image: Handle<Expression>,
+        sampler: Handle<Expression>,
+        gather: Option<SwizzleComponent>,
+        coordinate: Handle<Expression>,
+        array_index: Option<Handle<Expression>>,
+        offset: Option<Handle<Expression>>,
+        level: SampleLevel,
+        depth_ref: Option<Handle<Expression>>,
+    },
+
+    ImageLoad {
+        image: Handle<Expression>,
+
+        coordinate: Handle<Expression>,
+
+        array_index: Option<Handle<Expression>>,
+
+        sample: Option<Handle<Expression>>,
+
+        level: Option<Handle<Expression>>,
+    },
+
+    ImageQuery {
+        image: Handle<Expression>,
+        query: ImageQuery,
+    },
+    Unary {
+        op: UnaryOperator,
+        expr: Handle<Expression>,
+    },
+    Binary {
+        op: BinaryOperator,
+        left: Handle<Expression>,
+        right: Handle<Expression>,
+    },
+    Select {
+        condition: Handle<Expression>,
+        accept: Handle<Expression>,
+        reject: Handle<Expression>,
+    },
+    Derivative {
+        axis: DerivativeAxis,
+        ctrl: DerivativeControl,
+        expr: Handle<Expression>,
+    },
+    Relational {
+        fun: RelationalFunction,
+        argument: Handle<Expression>,
+    },
+    Math {
+        fun: MathFunction,
+        arg: Handle<Expression>,
+        arg1: Option<Handle<Expression>>,
+        arg2: Option<Handle<Expression>>,
+        arg3: Option<Handle<Expression>>,
+    },
+    As {
+        expr: Handle<Expression>,
+        kind: ScalarKind,
+        convert: Option<Bytes>,
+    },
+    CallResult(Handle<Function>),
+    AtomicResult { ty: Handle<Type>, comparison: bool },
+    WorkGroupUniformLoadResult {
+        ty: Handle<Type>,
+    },
+    ArrayLength(Handle<Expression>),
+
+    RayQueryProceedResult,
+
+    RayQueryGetIntersection {
+        query: Handle<Expression>,
+        committed: bool,
+    },
+}
+
+pub use block::Block;
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[cfg_attr(feature = "serialize", derive(Serialize))]
+#[cfg_attr(feature = "deserialize", derive(Deserialize))]
+#[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
+pub enum SwitchValue {
+    I32(i32),
+    U32(u32),
+    Default,
+}
+
+#[derive(Clone, Debug)]
+#[cfg_attr(feature = "serialize", derive(Serialize))]
+#[cfg_attr(feature = "deserialize", derive(Deserialize))]
+#[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
+pub struct SwitchCase {
+    pub value: SwitchValue,
+    pub body: Block,
+    pub fall_through: bool,
+}
+
+#[derive(Clone, Debug)]
+#[cfg_attr(feature = "serialize", derive(Serialize))]
+#[cfg_attr(feature = "deserialize", derive(Deserialize))]
+#[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
+pub enum RayQueryFunction {
+    Initialize {
+        acceleration_structure: Handle<Expression>,
+
+        #[allow(rustdoc::private_intra_doc_links)]
+        descriptor: Handle<Expression>,
+    },
+
+    Proceed {
+        result: Handle<Expression>,
+    },
+
+    Terminate,
+}
+
+#[derive(Clone, Debug)]
+#[cfg_attr(feature = "serialize", derive(Serialize))]
+#[cfg_attr(feature = "deserialize", derive(Deserialize))]
+#[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
+pub enum Statement {
+    Emit(Range<Expression>),
+    Block(Block),
+    If {
+        condition: Handle<Expression>,       
+        accept: Block,
+        reject: Block,
+    },
+    Switch {
+        selector: Handle<Expression>,
+        cases: Vec<SwitchCase>,
+    },
+
+    Loop {
+        body: Block,
+        continuing: Block,
+        break_if: Option<Handle<Expression>>,
+    },
+
+    Break,
+
+    Continue,
+
+    Return { value: Option<Handle<Expression>> },
+
+    Kill,
+
+    Barrier(Barrier),
+    Store {
+        pointer: Handle<Expression>,
+        value: Handle<Expression>,
+    },
+    ImageStore {
+        image: Handle<Expression>,
+        coordinate: Handle<Expression>,
+        array_index: Option<Handle<Expression>>,
+        value: Handle<Expression>,
+    },
+    Atomic {
+        pointer: Handle<Expression>,
+        fun: AtomicFunction,
+        value: Handle<Expression>,
+        result: Handle<Expression>,
+    },
+    WorkGroupUniformLoad {
+        pointer: Handle<Expression>,
+        result: Handle<Expression>,
+    },
+    Call {
+        function: Handle<Function>,
+        arguments: Vec<Handle<Expression>>,
+        result: Option<Handle<Expression>>,
+    },
+    RayQuery {
+        query: Handle<Expression>,
+
+        fun: RayQueryFunction,
+    },
+}
+
+#[derive(Clone, Debug)]
+#[cfg_attr(feature = "serialize", derive(Serialize))]
+#[cfg_attr(feature = "deserialize", derive(Deserialize))]
+#[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
+pub struct FunctionArgument {
+    pub name: Option<String>,
+    pub ty: Handle<Type>,
+    pub binding: Option<Binding>,
+}
+
+#[derive(Clone, Debug)]
+#[cfg_attr(feature = "serialize", derive(Serialize))]
+#[cfg_attr(feature = "deserialize", derive(Deserialize))]
+#[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
+pub struct FunctionResult {
+    pub ty: Handle<Type>,
+    pub binding: Option<Binding>,
+}
+
+#[derive(Debug, Default)]
+#[cfg_attr(feature = "clone", derive(Clone))]
+#[cfg_attr(feature = "serialize", derive(Serialize))]
+#[cfg_attr(feature = "deserialize", derive(Deserialize))]
+#[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
+pub struct Function {
+    pub name: Option<String>,
+    pub arguments: Vec<FunctionArgument>,
+    pub result: Option<FunctionResult>,
+    pub local_variables: Arena<LocalVariable>,
+    pub expressions: Arena<Expression>,
+    pub named_expressions: NamedExpressions,
+    pub body: Block,
+}
+
+#[derive(Debug)]
+#[cfg_attr(feature = "clone", derive(Clone))]
+#[cfg_attr(feature = "serialize", derive(Serialize))]
+#[cfg_attr(feature = "deserialize", derive(Deserialize))]
+#[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
+pub struct EntryPoint {
+    pub name: String,
+    pub stage: ShaderStage,
+    pub early_depth_test: Option<EarlyDepthTest>,
+    pub workgroup_size: [u32; 3],
+    pub function: Function,
+}
+
+#[derive(Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "clone", derive(Clone))]
+#[cfg_attr(feature = "serialize", derive(Serialize))]
+#[cfg_attr(feature = "deserialize", derive(Deserialize))]
+#[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
+pub enum PredeclaredType {
+    AtomicCompareExchangeWeakResult(Scalar),
+    ModfResult {
+        size: Option<VectorSize>,
+        width: Bytes,
+    },
+    FrexpResult {
+        size: Option<VectorSize>,
+        width: Bytes,
+    },
+}
+
+#[derive(Debug, Default)]
+#[cfg_attr(feature = "clone", derive(Clone))]
+#[cfg_attr(feature = "serialize", derive(Serialize))]
+#[cfg_attr(feature = "deserialize", derive(Deserialize))]
+#[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
+pub struct SpecialTypes {
+    pub ray_desc: Option<Handle<Type>>,
+
+    pub ray_intersection: Option<Handle<Type>>,
+
+    pub predeclared_types: FastIndexMap<PredeclaredType, Handle<Type>>,
+}
+
+#[derive(Debug, Default)]
+#[cfg_attr(feature = "clone", derive(Clone))]
+#[cfg_attr(feature = "serialize", derive(Serialize))]
+#[cfg_attr(feature = "deserialize", derive(Deserialize))]
+#[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
+pub struct Module {
+    pub types: UniqueArena<Type>,
+    pub special_types: SpecialTypes,
+    pub constants: Arena<Constant>,
+    pub global_variables: Arena<GlobalVariable>,
+    pub const_expressions: Arena<Expression>,
+    pub functions: Arena<Function>,
+    pub entry_points: Vec<EntryPoint>,
+}

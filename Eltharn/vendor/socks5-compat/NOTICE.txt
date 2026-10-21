@@ -1,0 +1,44 @@
+Eltharn SOCKS5 client compatibility adapter
+==========================================
+
+This directory contains an original, narrow compatibility adapter written for
+Eltharn. Its package name satisfies the dependency interface used by Azalea;
+it is not a fork, vendored copy or relicensing of the GPL socks5-impl package.
+No implementation bodies from that package were used to write this adapter.
+The original adapter is covered by the project license at ../../../LICENSE.
+
+Reviewed consumer:
+https://github.com/azalea-rs/azalea/blob/41a9ae6aaff77646c08c64ac1334a8cc6081c24f/azalea-protocol/src/connect.rs
+
+The supported interface is protocol::UserKey, its public username/password
+fields and constructor, Clone/Debug/Display, and client::connect on a fresh
+tokio::io::BufStream<tokio::net::TcpStream> with a SocketAddr destination.
+The Azalea consumer discards connect's success value. No server, BIND, UDP,
+GSSAPI or general drop-in compatibility with socks5-impl is claimed.
+
+Public interface reference, consulted without reading implementation bodies:
+https://docs.rs/socks5-impl/0.8.7/socks5_impl/protocol/handshake/password_method/struct.UserKey.html
+
+Wire behavior is delegated to the separately licensed tokio-socks crate:
+https://github.com/sticnarf/tokio-socks
+https://docs.rs/tokio-socks/0.5.3/tokio_socks/tcp/struct.Socks5Stream.html
+
+SOCKS5 CONNECT and username/password negotiation are specified by RFC 1928 and
+RFC 1929. These are network protocol contracts, not Minecraft behavior rules.
+https://www.rfc-editor.org/rfc/rfc1928.html
+https://www.rfc-editor.org/rfc/rfc1929.html
+
+The actual caller creates an empty BufStream immediately before negotiation
+and extracts its TcpStream immediately afterward. The adapter therefore uses
+the underlying TcpStream for the handshake, avoiding buffered writes and
+read-ahead that could discard the first destination bytes on into_inner().
+It must not be called on a BufStream with existing buffered reads or writes.
+The direct-server connection route is outside this adapter and is unchanged.
+
+Display produces percent-encoded URI credentials for Azalea's reqwest proxy
+conversion. Debug redacts both fields. Display output contains credentials
+and must not be logged. It is not an engine account/session storage service.
+
+Runtime dependencies retain their own licenses: tokio-socks (MIT), Tokio
+(MIT), percent-encoding (MIT OR Apache-2.0), and their resolved dependencies.
+Include their required notices in distributed dependency attribution.

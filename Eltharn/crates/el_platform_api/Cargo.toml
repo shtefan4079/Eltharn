@@ -1,0 +1,14 @@
+[package]
+name = "el_platform_api"
+version = "0.1.0"
+edition = "2024"
+description = "Platform-neutral Eltharn storage, resources, transport, and lifecycle contracts"
+license.workspace = true
+
+[dependencies]
+
+sha2 = "0.11"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+
+tokio = { version = "1", features = ["io-util"] }

@@ -1,0 +1,36 @@
+[workspace]
+members = ["Eltharn/crates/*", "Eltharn/apps/*", "EltharnGate"]
+default-members = ["Eltharn/apps/el_desktop"]
+exclude = [
+    "Eltharn/vendor/simdnbt",
+    "Eltharn/vendor/socks5-compat",
+]
+resolver = "2"
+
+[workspace.package]
+license = "PolyForm-Noncommercial-1.0.0"
+
+[profile.dev.package.el_client]
+opt-level = 2
+
+[profile.release]
+lto = "thin"
+strip = "debuginfo"
+codegen-units = 1
+opt-level = 3
+
+[patch.crates-io]
+cfg_aliases = { path = "Eltharn/vendor/cfg_aliases-0.1.1" }
+naga = { path = "Eltharn/vendor/naga-0.19.2" }
+wgpu-hal = { path = "Eltharn/vendor/wgpu-hal-0.19.5" }
+simdnbt = { path = "Eltharn/vendor/simdnbt" }
+simdnbt-derive = { path = "Eltharn/vendor/simdnbt/simdnbt-derive" }
+socks5-impl = { path = "Eltharn/vendor/socks5-compat" }
+
+[patch."https://github.com/azalea-rs/simdnbt"]
+simdnbt = { path = "Eltharn/vendor/simdnbt" }
+simdnbt-derive = { path = "Eltharn/vendor/simdnbt/simdnbt-derive" }
+
+[patch."https://github.com/azalea-rs/azalea"]
+azalea-chat = { path = "Eltharn/crates/el_protocol_1_21_11/vendor/azalea-chat" }
+azalea-inventory = { path = "Eltharn/crates/el_protocol_1_21_11/vendor/azalea-inventory" }

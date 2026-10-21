@@ -1,0 +1,140 @@
+[package]
+name = "el_client"
+version = "0.1.0"
+edition = "2024"
+autobins = false
+license.workspace = true
+description = "High-performance native Minecraft-compatible client"
+
+[lib]
+name = "el_client"
+path = "src/lib.rs"
+
+[[bin]]
+name = "eltharn_client"
+path = "src/bin/eltharn_client.rs"
+
+[dependencies]
+el_extension_manager = { path = "../el_extension_manager", optional = true }
+el_mod_runtime = { path = "../el_mod_runtime", optional = true }
+el_mod_content = { path = "../el_mod_content", optional = true }
+el_mod_network = { path = "../el_mod_network", optional = true }
+el_core = { package = "el_core", path = "../el_core" }
+el_math = { package = "el_math", path = "../el_math" }
+el_world = { package = "el_world", path = "../el_world" }
+el_protocol = { package = "el_protocol", path = "../el_protocol" }
+el_inventory = { package = "el_inventory", path = "../el_inventory" }
+el_gui = { path = "../el_gui" }
+el_nbt = { path = "../el_nbt" }
+el_protocol_backend = { path = "../el_protocol_backend" }
+url = "2"
+el_protocol_api = { path = "../el_protocol_api" }
+el_platform_api = { path = "../el_platform_api" }
+el_shaderpack = { path = "../el_shaderpack", optional = true }
+el_launcher_core = { path = "../el_launcher_core" }
+
+
+el_extension_api = { path = "../el_extension_api" }
+uuid = { version = "1.0", features = ["v3"] }
+crossbeam-channel = "0.5"
+base64 = "0.22"
+sha1 = "0.11"
+dirs = "5"
+
+wgpu = { version = "0.19", features = ["webgl"] }
+log = "0.4"
+rayon = "1"
+glam = "0.27"
+bytemuck = { version = "1.25.0", features = ["derive"] }
+pollster = { version = "0.4.0", optional = true }
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+rodio = { version = "0.19.0", default-features = false, features = ["symphonia-vorbis", "symphonia-wav"], optional = true }
+
+
+symphonia = { version = "0.5.5", default-features = false, features = ["ogg", "vorbis"], optional = true }
+zip = { version = "2.2", default-features = false, features = ["deflate"] }
+ab_glyph = "0.2"
+
+
+web-time = "1"
+
+
+[features]
+extensions = ["shaderpacks", "dep:el_extension_manager", "dep:el_mod_runtime", "dep:el_mod_content", "dep:el_mod_network", "el_mod_runtime/native"]
+default = ["native", "extensions"]
+legacy-wasm-mods = ["extensions", "el_mod_runtime/legacy-wasm"]
+shaderpacks = ["dep:el_shaderpack"]
+native = ["dep:pollster", "dep:rodio", "dep:symphonia", "dep:alsa"]
+
+[target.'cfg(target_os = "linux")'.dependencies]
+
+
+alsa = { version = "=0.9.1", optional = true }
+raw-window-handle = "0.6"
+wayland-client = "0.31"
+wayland-backend = { version = "0.3", features = ["client_system", "dlopen"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+memmap2 = "=0.9.10"
+tempfile = "=3.27.0"
+
+
+hickory-resolver = { version = "=0.25.2", default-features = false, features = ["system-config", "tokio"] }
+tokio = { version = "1", features = ["rt", "net", "time"] }
+
+
+reqwest = { version = "0.12.28", default-features = false, features = [
+    "blocking",
+    "rustls-tls",
+    "http2",
+] }
+
+
+winit = { version = "0.29", features = ["android-game-activity"] }
+env_logger = "0.11"
+
+[target.'cfg(target_os = "android")'.dependencies]
+
+
+libc = "0.2"
+raw-window-handle = "0.6"
+jni = "0.21"
+
+[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
+arboard = { version = "3", features = ["wayland-data-control"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom_02 = { package = "getrandom", version = "0.2", features = ["js"] }
+getrandom_04 = { package = "getrandom", version = "0.4", features = ["wasm_js"] }
+
+js-sys = "0.3"
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+
+
+wasm-bindgen-rayon = "1.3"
+web-sys = { version = "0.3", features = [
+    "Window",
+    "Document",
+    "HtmlCanvasElement",
+    "Performance",
+    "Storage",
+    "Location",
+    "BinaryType",
+    "MessageEvent",
+    "WebSocket",
+    "Event",
+    "CloseEvent",
+    "Request",
+    "RequestInit",
+    "RequestMode",
+    "Response",
+    "Headers",
+] }
+console_error_panic_hook = "0.1"
+console_log = "1"
+
+
+winit = { version = "0.29" }

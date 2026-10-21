@@ -1,0 +1,626 @@
+
+
+
+
+
+
+
+
+
+mod adapter;
+mod command;
+mod conv;
+mod device;
+mod instance;
+
+use std::{
+    borrow::Borrow,
+    ffi::CStr,
+    fmt,
+    num::NonZeroU32,
+    sync::{
+        atomic::{AtomicIsize, Ordering},
+        Arc,
+    },
+};
+
+use arrayvec::ArrayVec;
+use ash::{
+    extensions::{ext, khr},
+    vk,
+};
+use parking_lot::{Mutex, RwLock};
+
+const MILLIS_TO_NANOS: u64 = 1_000_000;
+const MAX_TOTAL_ATTACHMENTS: usize = crate::MAX_COLOR_ATTACHMENTS * 2 + 1;
+
+#[derive(Clone, Debug)]
+pub struct Api;
+
+impl crate::Api for Api {
+    type Instance = Instance;
+    type Surface = Surface;
+    type Adapter = Adapter;
+    type Device = Device;
+
+    type Queue = Queue;
+    type CommandEncoder = CommandEncoder;
+    type CommandBuffer = CommandBuffer;
+
+    type Buffer = Buffer;
+    type Texture = Texture;
+    type SurfaceTexture = SurfaceTexture;
+    type TextureView = TextureView;
+    type Sampler = Sampler;
+    type QuerySet = QuerySet;
+    type Fence = Fence;
+    type AccelerationStructure = AccelerationStructure;
+
+    type BindGroupLayout = BindGroupLayout;
+    type BindGroup = BindGroup;
+    type PipelineLayout = PipelineLayout;
+    type ShaderModule = ShaderModule;
+    type RenderPipeline = RenderPipeline;
+    type ComputePipeline = ComputePipeline;
+}
+
+struct DebugUtils {
+    extension: ext::DebugUtils,
+    messenger: vk::DebugUtilsMessengerEXT,
+
+    #[allow(dead_code)]
+    callback_data: Box<DebugUtilsMessengerUserData>,
+}
+
+pub struct DebugUtilsCreateInfo {
+    severity: vk::DebugUtilsMessageSeverityFlagsEXT,
+    message_type: vk::DebugUtilsMessageTypeFlagsEXT,
+    callback_data: Box<DebugUtilsMessengerUserData>,
+}
+
+#[derive(Debug)]
+pub struct DebugUtilsMessengerUserData {
+    validation_layer_description: std::ffi::CString,
+
+    validation_layer_spec_version: u32,
+
+    has_obs_layer: bool,
+}
+
+pub struct InstanceShared {
+    raw: ash::Instance,
+    extensions: Vec<&'static CStr>,
+    drop_guard: Option<crate::DropGuard>,
+    flags: wgt::InstanceFlags,
+    debug_utils: Option<DebugUtils>,
+    get_physical_device_properties: Option<khr::GetPhysicalDeviceProperties2>,
+    entry: ash::Entry,
+    has_nv_optimus: bool,
+    android_sdk_version: u32,
+    instance_api_version: u32,
+}
+
+pub struct Instance {
+    shared: Arc<InstanceShared>,
+}
+
+struct Swapchain {
+    raw: vk::SwapchainKHR,
+    raw_flags: vk::SwapchainCreateFlagsKHR,
+    functor: khr::Swapchain,
+    device: Arc<DeviceShared>,
+    fence: vk::Fence,
+    images: Vec<vk::Image>,
+    config: crate::SurfaceConfiguration,
+    view_formats: Vec<wgt::TextureFormat>,
+}
+
+pub struct Surface {
+    raw: vk::SurfaceKHR,
+    functor: khr::Surface,
+    instance: Arc<InstanceShared>,
+    swapchain: RwLock<Option<Swapchain>>,
+}
+
+#[derive(Debug)]
+pub struct SurfaceTexture {
+    index: u32,
+    texture: Texture,
+}
+
+impl Borrow<Texture> for SurfaceTexture {
+    fn borrow(&self) -> &Texture {
+        &self.texture
+    }
+}
+
+pub struct Adapter {
+    raw: vk::PhysicalDevice,
+    instance: Arc<InstanceShared>,
+    known_memory_flags: vk::MemoryPropertyFlags,
+    phd_capabilities: adapter::PhysicalDeviceCapabilities,
+    downlevel_flags: wgt::DownlevelFlags,
+    private_caps: PrivateCapabilities,
+    workarounds: Workarounds,
+}
+
+enum ExtensionFn<T> {
+    Extension(T),
+    Promoted,
+}
+
+struct DeviceExtensionFunctions {
+    draw_indirect_count: Option<khr::DrawIndirectCount>,
+    timeline_semaphore: Option<ExtensionFn<khr::TimelineSemaphore>>,
+    ray_tracing: Option<RayTracingDeviceExtensionFunctions>,
+}
+
+struct RayTracingDeviceExtensionFunctions {
+    acceleration_structure: khr::AccelerationStructure,
+    buffer_device_address: khr::BufferDeviceAddress,
+}
+
+#[derive(Clone, Debug)]
+struct PrivateCapabilities {
+    flip_y_requires_shift: bool,
+    imageless_framebuffers: bool,
+    image_view_usage: bool,
+    timeline_semaphores: bool,
+    texture_d24: bool,
+    texture_d24_s8: bool,
+    texture_s8: bool,
+    can_present: bool,
+    non_coherent_map_mask: wgt::BufferAddress,
+    robust_buffer_access: bool,
+    robust_image_access: bool,
+    robust_buffer_access2: bool,
+    robust_image_access2: bool,
+    zero_initialize_workgroup_memory: bool,
+    image_format_list: bool,
+}
+
+bitflags::bitflags!(
+    #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+    pub struct Workarounds: u32 {
+        const SEPARATE_ENTRY_POINTS = 0x1;
+        const EMPTY_RESOLVE_ATTACHMENT_LISTS = 0x2;
+        const FORCE_FILL_BUFFER_WITH_SIZE_GREATER_4096_ALIGNED_OFFSET_16 = 0x4;
+    }
+);
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct AttachmentKey {
+    format: vk::Format,
+    layout: vk::ImageLayout,
+    ops: crate::AttachmentOps,
+}
+
+impl AttachmentKey {
+    fn compatible(format: vk::Format, layout: vk::ImageLayout) -> Self {
+        Self {
+            format,
+            layout,
+            ops: crate::AttachmentOps::all(),
+        }
+    }
+}
+
+#[derive(Clone, Eq, Hash, PartialEq)]
+struct ColorAttachmentKey {
+    base: AttachmentKey,
+    resolve: Option<AttachmentKey>,
+}
+
+#[derive(Clone, Eq, Hash, PartialEq)]
+struct DepthStencilAttachmentKey {
+    base: AttachmentKey,
+    stencil_ops: crate::AttachmentOps,
+}
+
+#[derive(Clone, Eq, Default, Hash, PartialEq)]
+struct RenderPassKey {
+    colors: ArrayVec<Option<ColorAttachmentKey>, { crate::MAX_COLOR_ATTACHMENTS }>,
+    depth_stencil: Option<DepthStencilAttachmentKey>,
+    sample_count: u32,
+    multiview: Option<NonZeroU32>,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct FramebufferAttachment {
+    raw: vk::ImageView,
+    raw_image_flags: vk::ImageCreateFlags,
+    view_usage: crate::TextureUses,
+    view_format: wgt::TextureFormat,
+    raw_view_formats: Vec<vk::Format>,
+}
+
+#[derive(Clone, Eq, Hash, PartialEq)]
+struct FramebufferKey {
+    attachments: ArrayVec<FramebufferAttachment, { MAX_TOTAL_ATTACHMENTS }>,
+    extent: wgt::Extent3d,
+    sample_count: u32,
+}
+
+struct DeviceShared {
+    raw: ash::Device,
+    family_index: u32,
+    queue_index: u32,
+    raw_queue: vk::Queue,
+    handle_is_owned: bool,
+    instance: Arc<InstanceShared>,
+    physical_device: vk::PhysicalDevice,
+    enabled_extensions: Vec<&'static CStr>,
+    extension_fns: DeviceExtensionFunctions,
+    vendor_id: u32,
+    timestamp_period: f32,
+    private_caps: PrivateCapabilities,
+    workarounds: Workarounds,
+    render_passes: Mutex<rustc_hash::FxHashMap<RenderPassKey, vk::RenderPass>>,
+    framebuffers: Mutex<rustc_hash::FxHashMap<FramebufferKey, vk::Framebuffer>>,
+}
+
+pub struct Device {
+    shared: Arc<DeviceShared>,
+    mem_allocator: Mutex<gpu_alloc::GpuAllocator<vk::DeviceMemory>>,
+    desc_allocator:
+        Mutex<gpu_descriptor::DescriptorAllocator<vk::DescriptorPool, vk::DescriptorSet>>,
+    valid_ash_memory_types: u32,
+    naga_options: naga::back::spv::Options<'static>,
+    #[cfg(feature = "renderdoc")]
+    render_doc: crate::auxil::renderdoc::RenderDoc,
+}
+
+pub struct Queue {
+    raw: vk::Queue,
+    swapchain_fn: khr::Swapchain,
+    device: Arc<DeviceShared>,
+    family_index: u32,
+    relay_semaphores: [vk::Semaphore; 2],
+    relay_index: AtomicIsize,
+}
+
+#[derive(Debug)]
+pub struct Buffer {
+    raw: vk::Buffer,
+    block: Option<Mutex<gpu_alloc::MemoryBlock<vk::DeviceMemory>>>,
+}
+
+#[derive(Debug)]
+pub struct AccelerationStructure {
+    raw: vk::AccelerationStructureKHR,
+    buffer: vk::Buffer,
+    block: Mutex<gpu_alloc::MemoryBlock<vk::DeviceMemory>>,
+}
+
+#[derive(Debug)]
+pub struct Texture {
+    raw: vk::Image,
+    drop_guard: Option<crate::DropGuard>,
+    block: Option<gpu_alloc::MemoryBlock<vk::DeviceMemory>>,
+    usage: crate::TextureUses,
+    format: wgt::TextureFormat,
+    raw_flags: vk::ImageCreateFlags,
+    copy_size: crate::CopyExtent,
+    view_formats: Vec<wgt::TextureFormat>,
+}
+
+impl Texture {
+    pub unsafe fn raw_handle(&self) -> vk::Image {
+        self.raw
+    }
+}
+
+#[derive(Debug)]
+pub struct TextureView {
+    raw: vk::ImageView,
+    layers: NonZeroU32,
+    attachment: FramebufferAttachment,
+}
+
+#[derive(Debug)]
+pub struct Sampler {
+    raw: vk::Sampler,
+}
+
+#[derive(Debug)]
+pub struct BindGroupLayout {
+    raw: vk::DescriptorSetLayout,
+    desc_count: gpu_descriptor::DescriptorTotalCount,
+    types: Box<[(vk::DescriptorType, u32)]>,
+    binding_arrays: Vec<(u32, NonZeroU32)>,
+}
+
+#[derive(Debug)]
+pub struct PipelineLayout {
+    raw: vk::PipelineLayout,
+    binding_arrays: naga::back::spv::BindingMap,
+}
+
+#[derive(Debug)]
+pub struct BindGroup {
+    set: gpu_descriptor::DescriptorSet<vk::DescriptorSet>,
+}
+
+#[derive(Default)]
+struct Temp {
+    marker: Vec<u8>,
+    buffer_barriers: Vec<vk::BufferMemoryBarrier>,
+    image_barriers: Vec<vk::ImageMemoryBarrier>,
+}
+
+unsafe impl Send for Temp {}
+unsafe impl Sync for Temp {}
+
+impl Temp {
+    fn clear(&mut self) {
+        self.marker.clear();
+        self.buffer_barriers.clear();
+        self.image_barriers.clear();
+    }
+
+    fn make_c_str(&mut self, name: &str) -> &CStr {
+        self.marker.clear();
+        self.marker.extend_from_slice(name.as_bytes());
+        self.marker.push(0);
+        unsafe { CStr::from_bytes_with_nul_unchecked(&self.marker) }
+    }
+}
+
+pub struct CommandEncoder {
+    raw: vk::CommandPool,
+    device: Arc<DeviceShared>,
+    active: vk::CommandBuffer,
+    bind_point: vk::PipelineBindPoint,
+    temp: Temp,
+    free: Vec<vk::CommandBuffer>,
+    discarded: Vec<vk::CommandBuffer>,
+    rpass_debug_marker_active: bool,
+
+    end_of_pass_timer_query: Option<(vk::QueryPool, u32)>,
+}
+
+impl fmt::Debug for CommandEncoder {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CommandEncoder")
+            .field("raw", &self.raw)
+            .finish()
+    }
+}
+
+#[derive(Debug)]
+pub struct CommandBuffer {
+    raw: vk::CommandBuffer,
+}
+
+#[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
+pub enum ShaderModule {
+    Raw(vk::ShaderModule),
+    Intermediate {
+        naga_shader: crate::NagaShader,
+        runtime_checks: bool,
+    },
+}
+
+#[derive(Debug)]
+pub struct RenderPipeline {
+    raw: vk::Pipeline,
+}
+
+#[derive(Debug)]
+pub struct ComputePipeline {
+    raw: vk::Pipeline,
+}
+
+#[derive(Debug)]
+pub struct QuerySet {
+    raw: vk::QueryPool,
+}
+
+#[derive(Debug)]
+pub enum Fence {
+    TimelineSemaphore(vk::Semaphore),
+    FencePool {
+        last_completed: crate::FenceValue,
+        active: Vec<(crate::FenceValue, vk::Fence)>,
+        free: Vec<vk::Fence>,
+    },
+}
+
+impl Fence {
+    fn check_active(
+        device: &ash::Device,
+        mut max_value: crate::FenceValue,
+        active: &[(crate::FenceValue, vk::Fence)],
+    ) -> Result<crate::FenceValue, crate::DeviceError> {
+        for &(value, raw) in active.iter() {
+            unsafe {
+                if value > max_value && device.get_fence_status(raw)? {
+                    max_value = value;
+                }
+            }
+        }
+        Ok(max_value)
+    }
+
+    fn get_latest(
+        &self,
+        device: &ash::Device,
+        extension: Option<&ExtensionFn<khr::TimelineSemaphore>>,
+    ) -> Result<crate::FenceValue, crate::DeviceError> {
+        match *self {
+            Self::TimelineSemaphore(raw) => unsafe {
+                Ok(match *extension.unwrap() {
+                    ExtensionFn::Extension(ref ext) => ext.get_semaphore_counter_value(raw)?,
+                    ExtensionFn::Promoted => device.get_semaphore_counter_value(raw)?,
+                })
+            },
+            Self::FencePool {
+                last_completed,
+                ref active,
+                free: _,
+            } => Self::check_active(device, last_completed, active),
+        }
+    }
+
+    fn maintain(&mut self, device: &ash::Device) -> Result<(), crate::DeviceError> {
+        match *self {
+            Self::TimelineSemaphore(_) => {}
+            Self::FencePool {
+                ref mut last_completed,
+                ref mut active,
+                ref mut free,
+            } => {
+                let latest = Self::check_active(device, *last_completed, active)?;
+                let base_free = free.len();
+                for &(value, raw) in active.iter() {
+                    if value <= latest {
+                        free.push(raw);
+                    }
+                }
+                if free.len() != base_free {
+                    active.retain(|&(value, _)| value > latest);
+                    unsafe {
+                        device.reset_fences(&free[base_free..])?;
+                    }
+                }
+                *last_completed = latest;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl crate::Queue<Api> for Queue {
+    unsafe fn submit(
+        &self,
+        command_buffers: &[&CommandBuffer],
+        signal_fence: Option<(&mut Fence, crate::FenceValue)>,
+    ) -> Result<(), crate::DeviceError> {
+        let vk_cmd_buffers = command_buffers
+            .iter()
+            .map(|cmd| cmd.raw)
+            .collect::<Vec<_>>();
+
+        let mut vk_info = vk::SubmitInfo::builder().command_buffers(&vk_cmd_buffers);
+
+        let mut fence_raw = vk::Fence::null();
+        let mut vk_timeline_info;
+        let mut signal_semaphores = [vk::Semaphore::null(), vk::Semaphore::null()];
+        let signal_values;
+
+        if let Some((fence, value)) = signal_fence {
+            fence.maintain(&self.device.raw)?;
+            match *fence {
+                Fence::TimelineSemaphore(raw) => {
+                    signal_values = [!0, value];
+                    signal_semaphores[1] = raw;
+                    vk_timeline_info = vk::TimelineSemaphoreSubmitInfo::builder()
+                        .signal_semaphore_values(&signal_values);
+                    vk_info = vk_info.push_next(&mut vk_timeline_info);
+                }
+                Fence::FencePool {
+                    ref mut active,
+                    ref mut free,
+                    ..
+                } => {
+                    fence_raw = match free.pop() {
+                        Some(raw) => raw,
+                        None => unsafe {
+                            self.device
+                                .raw
+                                .create_fence(&vk::FenceCreateInfo::builder(), None)?
+                        },
+                    };
+                    active.push((value, fence_raw));
+                }
+            }
+        }
+
+        let wait_stage_mask = [vk::PipelineStageFlags::TOP_OF_PIPE];
+        let old_index = self.relay_index.load(Ordering::Relaxed);
+        let sem_index = if old_index >= 0 {
+            vk_info = vk_info
+                .wait_semaphores(&self.relay_semaphores[old_index as usize..old_index as usize + 1])
+                .wait_dst_stage_mask(&wait_stage_mask);
+            (old_index as usize + 1) % self.relay_semaphores.len()
+        } else {
+            0
+        };
+        self.relay_index
+            .store(sem_index as isize, Ordering::Relaxed);
+        signal_semaphores[0] = self.relay_semaphores[sem_index];
+
+        let signal_count = if signal_semaphores[1] == vk::Semaphore::null() {
+            1
+        } else {
+            2
+        };
+        vk_info = vk_info.signal_semaphores(&signal_semaphores[..signal_count]);
+
+        profiling::scope!("vkQueueSubmit");
+        unsafe {
+            self.device
+                .raw
+                .queue_submit(self.raw, &[vk_info.build()], fence_raw)?
+        };
+        Ok(())
+    }
+
+    unsafe fn present(
+        &self,
+        surface: &Surface,
+        texture: SurfaceTexture,
+    ) -> Result<(), crate::SurfaceError> {
+        let mut swapchain = surface.swapchain.write();
+        let ssc = swapchain.as_mut().unwrap();
+
+        let swapchains = [ssc.raw];
+        let image_indices = [texture.index];
+        let mut vk_info = vk::PresentInfoKHR::builder()
+            .swapchains(&swapchains)
+            .image_indices(&image_indices);
+
+        let old_index = self.relay_index.swap(-1, Ordering::Relaxed);
+        if old_index >= 0 {
+            vk_info = vk_info.wait_semaphores(
+                &self.relay_semaphores[old_index as usize..old_index as usize + 1],
+            );
+        }
+
+        let suboptimal = {
+            profiling::scope!("vkQueuePresentKHR");
+            unsafe { self.swapchain_fn.queue_present(self.raw, &vk_info) }.map_err(|error| {
+                match error {
+                    vk::Result::ERROR_OUT_OF_DATE_KHR => crate::SurfaceError::Outdated,
+                    vk::Result::ERROR_SURFACE_LOST_KHR => crate::SurfaceError::Lost,
+                    _ => crate::DeviceError::from(error).into(),
+                }
+            })?
+        };
+        if suboptimal {
+            #[cfg(not(target_os = "android"))]
+            log::warn!("Suboptimal present of frame {}", texture.index);
+        }
+        Ok(())
+    }
+
+    unsafe fn get_timestamp_period(&self) -> f32 {
+        self.device.timestamp_period
+    }
+}
+
+impl From<vk::Result> for crate::DeviceError {
+    fn from(result: vk::Result) -> Self {
+        match result {
+            vk::Result::ERROR_OUT_OF_HOST_MEMORY | vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => {
+                Self::OutOfMemory
+            }
+            vk::Result::ERROR_DEVICE_LOST => Self::Lost,
+            _ => {
+                log::warn!("Unrecognized device error {:?}", result);
+                Self::Lost
+            }
+        }
+    }
+}

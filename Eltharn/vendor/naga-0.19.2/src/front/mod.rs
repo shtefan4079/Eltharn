@@ -1,0 +1,166 @@
+
+mod interpolator;
+mod type_gen;
+
+#[cfg(feature = "glsl-in")]
+pub mod glsl;
+#[cfg(feature = "spv-in")]
+pub mod spv;
+#[cfg(feature = "wgsl-in")]
+pub mod wgsl;
+
+use crate::{
+    arena::{Arena, Handle, UniqueArena},
+    proc::{ResolveContext, ResolveError, TypeResolution},
+    FastHashMap,
+};
+use std::ops;
+
+#[derive(Debug, Default)]
+pub struct Typifier {
+    resolutions: Vec<TypeResolution>,
+}
+
+impl Typifier {
+    pub const fn new() -> Self {
+        Typifier {
+            resolutions: Vec::new(),
+        }
+    }
+
+    pub fn reset(&mut self) {
+        self.resolutions.clear()
+    }
+
+    pub fn get<'a>(
+        &'a self,
+        expr_handle: Handle<crate::Expression>,
+        types: &'a UniqueArena<crate::Type>,
+    ) -> &'a crate::TypeInner {
+        self.resolutions[expr_handle.index()].inner_with(types)
+    }
+
+    pub fn register_type(
+        &self,
+        expr_handle: Handle<crate::Expression>,
+        types: &mut UniqueArena<crate::Type>,
+    ) -> Handle<crate::Type> {
+        match self[expr_handle].clone() {
+            TypeResolution::Handle(handle) => handle,
+            TypeResolution::Value(inner) => {
+                types.insert(crate::Type { name: None, inner }, crate::Span::UNDEFINED)
+            }
+        }
+    }
+
+    pub fn grow(
+        &mut self,
+        expr_handle: Handle<crate::Expression>,
+        expressions: &Arena<crate::Expression>,
+        ctx: &ResolveContext,
+    ) -> Result<(), ResolveError> {
+        if self.resolutions.len() <= expr_handle.index() {
+            for (eh, expr) in expressions.iter().skip(self.resolutions.len()) {
+                let resolution = ctx.resolve(expr, |h| Ok(&self.resolutions[h.index()]))?;
+                log::debug!("Resolving {:?} = {:?} : {:?}", eh, expr, resolution);
+                self.resolutions.push(resolution);
+            }
+        }
+        Ok(())
+    }
+
+    pub fn invalidate(
+        &mut self,
+        expr_handle: Handle<crate::Expression>,
+        expressions: &Arena<crate::Expression>,
+        ctx: &ResolveContext,
+    ) -> Result<(), ResolveError> {
+        if self.resolutions.len() <= expr_handle.index() {
+            self.grow(expr_handle, expressions, ctx)
+        } else {
+            let expr = &expressions[expr_handle];
+            let resolution = ctx.resolve(expr, |h| Ok(&self.resolutions[h.index()]))?;
+            self.resolutions[expr_handle.index()] = resolution;
+            Ok(())
+        }
+    }
+}
+
+impl ops::Index<Handle<crate::Expression>> for Typifier {
+    type Output = TypeResolution;
+    fn index(&self, handle: Handle<crate::Expression>) -> &Self::Output {
+        &self.resolutions[handle.index()]
+    }
+}
+
+type Scope<Name, Var> = FastHashMap<Name, Var>;
+
+pub struct SymbolTable<Name, Var> {
+    scopes: Vec<Scope<Name, Var>>,
+    cursor: usize,
+}
+
+impl<Name, Var> SymbolTable<Name, Var> {
+    pub fn push_scope(&mut self) {
+        if self.scopes.len() == self.cursor {
+            self.scopes.push(FastHashMap::default())
+        } else {
+            self.scopes[self.cursor].clear();
+        }
+
+        self.cursor += 1;
+    }
+
+    pub fn pop_scope(&mut self) {
+        assert!(self.cursor != 1, "Tried to pop the root scope");
+
+        self.cursor -= 1;
+    }
+}
+
+impl<Name, Var> SymbolTable<Name, Var>
+where
+    Name: std::hash::Hash + Eq,
+{
+    pub fn lookup<Q: ?Sized>(&self, name: &Q) -> Option<&Var>
+    where
+        Name: std::borrow::Borrow<Q>,
+        Q: std::hash::Hash + Eq,
+    {
+        for scope in self.scopes[..self.cursor].iter().rev() {
+            if let Some(var) = scope.get(name) {
+                return Some(var);
+            }
+        }
+
+        None
+    }
+
+    pub fn add(&mut self, name: Name, var: Var) -> Option<Var> {
+        self.scopes[self.cursor - 1].insert(name, var)
+    }
+
+    pub fn add_root(&mut self, name: Name, var: Var) -> Option<Var> {
+        self.scopes[0].insert(name, var)
+    }
+}
+
+impl<Name, Var> Default for SymbolTable<Name, Var> {
+    fn default() -> Self {
+        Self {
+            scopes: vec![FastHashMap::default()],
+            cursor: 1,
+        }
+    }
+}
+
+use std::fmt;
+
+impl<Name: fmt::Debug, Var: fmt::Debug> fmt::Debug for SymbolTable<Name, Var> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("SymbolTable ")?;
+        f.debug_list()
+            .entries(self.scopes[..self.cursor].iter())
+            .finish()
+    }
+}

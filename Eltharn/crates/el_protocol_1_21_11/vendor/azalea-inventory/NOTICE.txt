@@ -1,0 +1,9 @@
+Azalea inventory source vendored from upstream revision
+41a9ae6aaff77646c08c64ac1334a8cc6081c24f (Minecraft 1.21.11 branch).
+Upstream repository: https://github.com/azalea-rs/azalea
+The original MIT license is retained in LICENSE.
+
+Eltharn changes: standalone Cargo dependency declarations and the missing
+EquipmentSlotGroup.SADDLE wire value 10 from Java 1.21.11. Other slot-group
+values retain their original indices. The native 26.2 checkout has the same
+source-backed correction. No account data or generated game captures included.

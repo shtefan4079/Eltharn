@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#090a0f" />
+  
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' blob:; connect-src 'self' ws: wss:; worker-src 'self' blob:; object-src 'none'; base-uri 'self'" />
+  <title>Eltharn Gate · Eltharn</title>
+  <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+  <link rel="stylesheet" href="./eltharn_gate.css" />
+  <script src="./coi-serviceworker.js?v=20260730_3"></script>
+  <script src="./eltharn_gate-config.js"></script>
+  <script src="./eltharn_gate-boot.js"></script>
+</head>
+
+<body>
+  <div id="eltharn_gate-error" class="eltharn_gate-error" hidden role="alert"></div>
+  <div id="eltharn_gate-splash" class="eltharn_gate-splash" hidden>
+    <div class="eltharn_gate-splash-content">
+      <div class="eltharn_gate-splash-logo">ELTHARN</div>
+      <div class="eltharn_gate-splash-title">CLIENT ENGINE</div>
+      <div class="eltharn_gate-splash-progress-track">
+        <div id="eltharn_gate-splash-progress-bar" class="eltharn_gate-splash-progress-bar"></div>
+      </div>
+      <div id="eltharn_gate-splash-status" class="eltharn_gate-splash-status">Loading game resources...</div>
+    </div>
+  </div>
+  <canvas id="eltharn_gate-canvas"></canvas>
+  <div id="eltharn_gate-game-status" class="eltharn_gate-game-status" hidden role="status"></div>
+
+  <script src="./eltharn_gate-main.js" type="module"></script>
+</body>
+
+</html>

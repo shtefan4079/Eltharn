@@ -1,0 +1,16 @@
+[package]
+name = "el_launcher_core"
+version = "0.1.0"
+edition = "2024"
+description = "Platform-neutral Eltharn launcher domain types and protocol validation"
+license.workspace = true
+
+[dependencies]
+el_extension_api = { path = "../el_extension_api" }
+
+
+el_protocol_api = { path = "../el_protocol_api" }
+
+el_strict_json = { path = "../el_strict_json" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"

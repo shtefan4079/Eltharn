@@ -1,0 +1,7 @@
+Eltharn Gate basic icons
+
+The 16 SVG files in this directory were redrawn for Eltharn on 2026-10-20
+using basic geometric shapes. No external icon set, image or traced artwork
+was used for these replacements. They use the project license in ../../../LICENSE.
+
+This record applies to these SVG sources, not third-party dependency artwork.

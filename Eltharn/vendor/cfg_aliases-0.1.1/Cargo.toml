@@ -1,0 +1,28 @@
+
+
+
+
+
+
+
+
+
+
+
+
+[package]
+edition = "2018"
+name = "cfg_aliases"
+version = "0.1.1"
+authors = ["Zicklag <zicklag@katharostech.com>"]
+exclude = ["modoc.config", "release.toml"]
+description = "A tiny utility to help save you a lot of effort with long winded `#[cfg()]` checks."
+homepage = "https://github.com/katharostech/cfg_aliases"
+documentation = "https://docs.rs/cfg_aliases"
+readme = "README.md"
+keywords = ["cfg", "alias", "conditional", "compilation", "build"]
+categories = ["development-tools", "development-tools::build-utils"]
+license = "MIT"
+repository = "https://github.com/katharostech/cfg_aliases"
+[badges.maintenance]
+status = "passively-maintained"

@@ -1,0 +1,185 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+mod conv;
+mod help;
+mod keywords;
+mod storage;
+mod writer;
+
+use std::fmt::Error as FmtError;
+use thiserror::Error;
+
+use crate::{back, proc};
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serialize", derive(serde::Serialize))]
+#[cfg_attr(feature = "deserialize", derive(serde::Deserialize))]
+pub struct BindTarget {
+    pub space: u8,
+    pub register: u32,
+    pub binding_array_size: Option<u32>,
+}
+
+pub type BindingMap = std::collections::BTreeMap<crate::ResourceBinding, BindTarget>;
+
+#[allow(non_snake_case, non_camel_case_types)]
+#[derive(Copy, Clone, Debug, Hash, Eq, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "serialize", derive(serde::Serialize))]
+#[cfg_attr(feature = "deserialize", derive(serde::Deserialize))]
+pub enum ShaderModel {
+    V5_0,
+    V5_1,
+    V6_0,
+}
+
+impl ShaderModel {
+    pub const fn to_str(self) -> &'static str {
+        match self {
+            Self::V5_0 => "5_0",
+            Self::V5_1 => "5_1",
+            Self::V6_0 => "6_0",
+        }
+    }
+}
+
+impl crate::ShaderStage {
+    pub const fn to_hlsl_str(self) -> &'static str {
+        match self {
+            Self::Vertex => "vs",
+            Self::Fragment => "ps",
+            Self::Compute => "cs",
+        }
+    }
+}
+
+impl crate::ImageDimension {
+    const fn to_hlsl_str(self) -> &'static str {
+        match self {
+            Self::D1 => "1D",
+            Self::D2 => "2D",
+            Self::D3 => "3D",
+            Self::Cube => "Cube",
+        }
+    }
+}
+
+type BackendResult = Result<(), Error>;
+
+#[derive(Clone, Debug, PartialEq, thiserror::Error)]
+#[cfg_attr(feature = "serialize", derive(serde::Serialize))]
+#[cfg_attr(feature = "deserialize", derive(serde::Deserialize))]
+pub enum EntryPointError {
+    #[error("mapping of {0:?} is missing")]
+    MissingBinding(crate::ResourceBinding),
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+#[cfg_attr(feature = "serialize", derive(serde::Serialize))]
+#[cfg_attr(feature = "deserialize", derive(serde::Deserialize))]
+pub struct Options {
+    pub shader_model: ShaderModel,
+    pub binding_map: BindingMap,
+    pub fake_missing_bindings: bool,
+    pub special_constants_binding: Option<BindTarget>,
+    pub push_constants_target: Option<BindTarget>,
+    pub zero_initialize_workgroup_memory: bool,
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Options {
+            shader_model: ShaderModel::V5_1,
+            binding_map: BindingMap::default(),
+            fake_missing_bindings: true,
+            special_constants_binding: None,
+            push_constants_target: None,
+            zero_initialize_workgroup_memory: true,
+        }
+    }
+}
+
+impl Options {
+    fn resolve_resource_binding(
+        &self,
+        res_binding: &crate::ResourceBinding,
+    ) -> Result<BindTarget, EntryPointError> {
+        match self.binding_map.get(res_binding) {
+            Some(target) => Ok(target.clone()),
+            None if self.fake_missing_bindings => Ok(BindTarget {
+                space: res_binding.group as u8,
+                register: res_binding.binding,
+                binding_array_size: None,
+            }),
+            None => Err(EntryPointError::MissingBinding(res_binding.clone())),
+        }
+    }
+}
+
+#[derive(Default)]
+pub struct ReflectionInfo {
+    pub entry_point_names: Vec<Result<String, EntryPointError>>,
+}
+
+#[derive(Error, Debug)]
+pub enum Error {
+    #[error(transparent)]
+    IoError(#[from] FmtError),
+    #[error("A scalar with an unsupported width was requested: {0:?}")]
+    UnsupportedScalar(crate::Scalar),
+    #[error("{0}")]
+    Unimplemented(String),                                            
+    #[error("{0}")]
+    Custom(String),
+}
+
+#[derive(Default)]
+struct Wrapped {
+    array_lengths: crate::FastHashSet<help::WrappedArrayLength>,
+    image_queries: crate::FastHashSet<help::WrappedImageQuery>,
+    constructors: crate::FastHashSet<help::WrappedConstructor>,
+    struct_matrix_access: crate::FastHashSet<help::WrappedStructMatrixAccess>,
+    mat_cx2s: crate::FastHashSet<help::WrappedMatCx2>,
+}
+
+impl Wrapped {
+    fn clear(&mut self) {
+        self.array_lengths.clear();
+        self.image_queries.clear();
+        self.constructors.clear();
+        self.struct_matrix_access.clear();
+        self.mat_cx2s.clear();
+    }
+}
+
+pub struct Writer<'a, W> {
+    out: W,
+    names: crate::FastHashMap<proc::NameKey, String>,
+    namer: proc::Namer,
+    options: &'a Options,
+    entry_point_io: Vec<writer::EntryPointInterface>,
+    named_expressions: crate::NamedExpressions,
+    wrapped: Wrapped,
+
+    temp_access_chain: Vec<storage::SubAccess>,
+    need_bake_expressions: back::NeedBakeExpressions,
+}

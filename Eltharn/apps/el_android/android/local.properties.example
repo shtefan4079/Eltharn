@@ -1,0 +1,7 @@
+
+
+sdk.dir=/absolute/path/to/Android/Sdk
+ndk.dir=/absolute/path/to/Android/Sdk/ndk/<pinned-revision>
+
+
+

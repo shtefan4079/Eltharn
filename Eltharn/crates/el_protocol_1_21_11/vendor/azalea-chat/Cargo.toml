@@ -1,0 +1,27 @@
+[package]
+name = "azalea-chat"
+description = "Parse Minecraft chat messages."
+version = "0.15.0+mc1.21.11"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/azalea-rs/azalea"
+
+[features]
+default = []
+simdnbt = ["dep:simdnbt"]
+azalea-buf = ["dep:azalea-buf", "simdnbt"]
+numbers = ["dep:azalea-registry", "dep:simdnbt"]
+
+[dependencies]
+azalea-buf = { git = "https://github.com/azalea-rs/azalea", rev = "41a9ae6aaff77646c08c64ac1334a8cc6081c24f", optional = true, features = ["serde_json"] }
+azalea-language = { git = "https://github.com/azalea-rs/azalea", rev = "41a9ae6aaff77646c08c64ac1334a8cc6081c24f" }
+azalea-registry = { git = "https://github.com/azalea-rs/azalea", rev = "41a9ae6aaff77646c08c64ac1334a8cc6081c24f", optional = true }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+simdnbt = { git = "https://github.com/azalea-rs/simdnbt", optional = true }
+tracing = "0.1"
+
+
+
+
+[workspace]

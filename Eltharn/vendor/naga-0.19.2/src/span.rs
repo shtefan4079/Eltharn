@@ -1,0 +1,340 @@
+use crate::{Arena, Handle, UniqueArena};
+use std::{error::Error, fmt, ops::Range};
+
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+pub struct Span {
+    start: u32,
+    end: u32,
+}
+
+impl Span {
+    pub const UNDEFINED: Self = Self { start: 0, end: 0 };
+    pub const fn new(start: u32, end: u32) -> Self {
+        Span { start, end }
+    }
+
+    pub const fn until(&self, other: &Self) -> Self {
+        Span {
+            start: self.start,
+            end: other.end,
+        }
+    }
+
+    pub fn subsume(&mut self, other: Self) {
+        *self = if !self.is_defined() {
+            other
+        } else if !other.is_defined() {
+            *self
+        } else {
+            Span {
+                start: self.start.min(other.start),
+                end: self.end.max(other.end),
+            }
+        }
+    }
+
+    pub fn total_span<T: Iterator<Item = Self>>(from: T) -> Self {
+        let mut span: Self = Default::default();
+        for other in from {
+            span.subsume(other);
+        }
+        span
+    }
+
+    pub fn to_range(self) -> Option<Range<usize>> {
+        if self.is_defined() {
+            Some(self.start as usize..self.end as usize)
+        } else {
+            None
+        }
+    }
+
+    pub fn is_defined(&self) -> bool {
+        *self != Self::default()
+    }
+
+    pub fn location(&self, source: &str) -> SourceLocation {
+        let prefix = &source[..self.start as usize];
+        let line_number = prefix.matches('\n').count() as u32 + 1;
+        let line_start = prefix.rfind('\n').map(|pos| pos + 1).unwrap_or(0);
+        let line_position = source[line_start..self.start as usize].chars().count() as u32 + 1;
+
+        SourceLocation {
+            line_number,
+            line_position,
+            offset: self.start,
+            length: self.end - self.start,
+        }
+    }
+}
+
+impl From<Range<usize>> for Span {
+    fn from(range: Range<usize>) -> Self {
+        Span {
+            start: range.start as u32,
+            end: range.end as u32,
+        }
+    }
+}
+
+impl std::ops::Index<Span> for str {
+    type Output = str;
+
+    #[inline]
+    fn index(&self, span: Span) -> &str {
+        &self[span.start as usize..span.end as usize]
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct SourceLocation {
+    pub line_number: u32,
+    pub line_position: u32,
+    pub offset: u32,
+    pub length: u32,
+}
+
+pub type SpanContext = (Span, String);
+
+#[derive(Debug, Clone)]
+pub struct WithSpan<E> {
+    inner: E,
+    spans: Vec<SpanContext>,
+}
+
+impl<E> fmt::Display for WithSpan<E>
+where
+    E: fmt::Display,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.inner.fmt(f)
+    }
+}
+
+
+
+impl<E> Error for WithSpan<E>
+where
+    E: Error,
+{
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        self.inner.source()
+    }
+}
+
+impl<E> WithSpan<E> {
+    pub const fn new(inner: E) -> Self {
+        Self {
+            inner,
+            spans: Vec::new(),
+        }
+    }
+
+    #[allow(clippy::missing_const_for_fn)]                                                                      
+    pub fn into_inner(self) -> E {
+        self.inner
+    }
+
+    pub const fn as_inner(&self) -> &E {
+        &self.inner
+    }
+
+    pub fn spans(&self) -> impl ExactSizeIterator<Item = &SpanContext> {
+        self.spans.iter()
+    }
+
+    pub fn with_span<S>(mut self, span: Span, description: S) -> Self
+    where
+        S: ToString,
+    {
+        if span.is_defined() {
+            self.spans.push((span, description.to_string()));
+        }
+        self
+    }
+
+    pub fn with_context(self, span_context: SpanContext) -> Self {
+        let (span, description) = span_context;
+        self.with_span(span, description)
+    }
+
+    pub(crate) fn with_handle<T, A: SpanProvider<T>>(self, handle: Handle<T>, arena: &A) -> Self {
+        self.with_context(arena.get_span_context(handle))
+    }
+
+    pub fn into_other<E2>(self) -> WithSpan<E2>
+    where
+        E2: From<E>,
+    {
+        WithSpan {
+            inner: self.inner.into(),
+            spans: self.spans,
+        }
+    }
+
+    pub fn and_then<F, E2>(self, func: F) -> WithSpan<E2>
+    where
+        F: FnOnce(E) -> WithSpan<E2>,
+    {
+        let mut res = func(self.inner);
+        res.spans.extend(self.spans);
+        res
+    }
+
+    pub fn location(&self, source: &str) -> Option<SourceLocation> {
+        if self.spans.is_empty() {
+            return None;
+        }
+
+        Some(self.spans[0].0.location(source))
+    }
+
+    fn diagnostic(&self) -> codespan_reporting::diagnostic::Diagnostic<()>
+    where
+        E: Error,
+    {
+        use codespan_reporting::diagnostic::{Diagnostic, Label};
+        let diagnostic = Diagnostic::error()
+            .with_message(self.inner.to_string())
+            .with_labels(
+                self.spans()
+                    .map(|&(span, ref desc)| {
+                        Label::primary((), span.to_range().unwrap()).with_message(desc.to_owned())
+                    })
+                    .collect(),
+            )
+            .with_notes({
+                let mut notes = Vec::new();
+                let mut source: &dyn Error = &self.inner;
+                while let Some(next) = Error::source(source) {
+                    notes.push(next.to_string());
+                    source = next;
+                }
+                notes
+            });
+        diagnostic
+    }
+
+    pub fn emit_to_stderr(&self, source: &str)
+    where
+        E: Error,
+    {
+        self.emit_to_stderr_with_path(source, "wgsl")
+    }
+
+    pub fn emit_to_stderr_with_path(&self, source: &str, path: &str)
+    where
+        E: Error,
+    {
+        use codespan_reporting::{files, term};
+        use term::termcolor::{ColorChoice, StandardStream};
+
+        let files = files::SimpleFile::new(path, source);
+        let config = term::Config::default();
+        let writer = StandardStream::stderr(ColorChoice::Auto);
+        term::emit(&mut writer.lock(), &config, &files, &self.diagnostic())
+            .expect("cannot write error");
+    }
+
+    pub fn emit_to_string(&self, source: &str) -> String
+    where
+        E: Error,
+    {
+        self.emit_to_string_with_path(source, "wgsl")
+    }
+
+    pub fn emit_to_string_with_path(&self, source: &str, path: &str) -> String
+    where
+        E: Error,
+    {
+        use codespan_reporting::{files, term};
+        use term::termcolor::NoColor;
+
+        let files = files::SimpleFile::new(path, source);
+        let config = term::Config::default();
+        let mut writer = NoColor::new(Vec::new());
+        term::emit(&mut writer, &config, &files, &self.diagnostic()).expect("cannot write error");
+        String::from_utf8(writer.into_inner()).unwrap()
+    }
+}
+
+pub(crate) trait AddSpan: Sized {
+    type Output;
+    fn with_span(self) -> Self::Output;
+    fn with_span_static(self, span: Span, description: &'static str) -> Self::Output;
+    fn with_span_context(self, span_context: SpanContext) -> Self::Output;
+    fn with_span_handle<T, A: SpanProvider<T>>(self, handle: Handle<T>, arena: &A) -> Self::Output;
+}
+
+pub(crate) trait SpanProvider<T> {
+    fn get_span(&self, handle: Handle<T>) -> Span;
+    fn get_span_context(&self, handle: Handle<T>) -> SpanContext {
+        match self.get_span(handle) {
+            x if !x.is_defined() => (Default::default(), "".to_string()),
+            known => (
+                known,
+                format!("{} {:?}", std::any::type_name::<T>(), handle),
+            ),
+        }
+    }
+}
+
+impl<T> SpanProvider<T> for Arena<T> {
+    fn get_span(&self, handle: Handle<T>) -> Span {
+        self.get_span(handle)
+    }
+}
+
+impl<T> SpanProvider<T> for UniqueArena<T> {
+    fn get_span(&self, handle: Handle<T>) -> Span {
+        self.get_span(handle)
+    }
+}
+
+impl<E> AddSpan for E
+where
+    E: Error,
+{
+    type Output = WithSpan<Self>;
+    fn with_span(self) -> WithSpan<Self> {
+        WithSpan::new(self)
+    }
+
+    fn with_span_static(self, span: Span, description: &'static str) -> WithSpan<Self> {
+        WithSpan::new(self).with_span(span, description)
+    }
+
+    fn with_span_context(self, span_context: SpanContext) -> WithSpan<Self> {
+        WithSpan::new(self).with_context(span_context)
+    }
+
+    fn with_span_handle<T, A: SpanProvider<T>>(
+        self,
+        handle: Handle<T>,
+        arena: &A,
+    ) -> WithSpan<Self> {
+        WithSpan::new(self).with_handle(handle, arena)
+    }
+}
+
+pub trait MapErrWithSpan<E, E2>: Sized {
+    type Output: Sized;
+    fn map_err_inner<F, E3>(self, func: F) -> Self::Output
+    where
+        F: FnOnce(E) -> WithSpan<E3>,
+        E2: From<E3>;
+}
+
+impl<T, E, E2> MapErrWithSpan<E, E2> for Result<T, WithSpan<E>> {
+    type Output = Result<T, WithSpan<E2>>;
+    fn map_err_inner<F, E3>(self, func: F) -> Result<T, WithSpan<E2>>
+    where
+        F: FnOnce(E) -> WithSpan<E3>,
+        E2: From<E3>,
+    {
+        self.map_err(|e| e.and_then(func).into_other::<E2>())
+    }
+}
+
+

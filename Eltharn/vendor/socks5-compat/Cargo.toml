@@ -1,0 +1,19 @@
+[package]
+name = "socks5-impl"
+version = "0.8.7"
+edition = "2024"
+publish = false
+description = "Original Eltharn adapter for the SOCKS5 client interface used by Azalea"
+license-file = "../../../LICENSE"
+
+[workspace]
+
+[features]
+default = []
+client = []
+
+[dependencies]
+percent-encoding = "2.3"
+tokio = { version = "1", features = ["io-util", "net"] }
+tokio-socks = "0.5.3"
+

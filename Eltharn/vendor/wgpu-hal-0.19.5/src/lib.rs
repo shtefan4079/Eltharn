@@ -1,0 +1,1235 @@
+
+#![cfg_attr(docsrs, feature(doc_cfg, doc_auto_cfg))]
+#![allow(
+    unknown_lints,
+    clippy::never_loop,
+    clippy::match_like_matches_macro,
+    clippy::redundant_pattern_matching,
+    clippy::needless_lifetimes,
+    clippy::new_without_default,
+    clippy::single_match,
+    clippy::vec_init_then_push,
+    clippy::if_then_panic,
+    clippy::non_send_fields_in_send_ty,
+    clippy::missing_safety_doc,
+    clippy::needless_borrowed_reference,
+)]
+#![warn(
+    trivial_casts,
+    trivial_numeric_casts,
+    unsafe_op_in_unsafe_fn,
+    unused_extern_crates,
+    unused_qualifications,
+    clippy::pattern_type_mismatch,
+)]
+
+#[cfg(dx12)]
+pub mod dx12;
+pub mod empty;
+#[cfg(gles)]
+pub mod gles;
+#[cfg(metal)]
+pub mod metal;
+#[cfg(vulkan)]
+pub mod vulkan;
+
+pub mod auxil;
+pub mod api {
+    #[cfg(dx12)]
+    pub use super::dx12::Api as Dx12;
+    pub use super::empty::Api as Empty;
+    #[cfg(gles)]
+    pub use super::gles::Api as Gles;
+    #[cfg(metal)]
+    pub use super::metal::Api as Metal;
+    #[cfg(vulkan)]
+    pub use super::vulkan::Api as Vulkan;
+}
+
+use std::{
+    borrow::{Borrow, Cow},
+    fmt,
+    num::NonZeroU32,
+    ops::{Range, RangeInclusive},
+    ptr::NonNull,
+    sync::Arc,
+};
+
+use bitflags::bitflags;
+use parking_lot::Mutex;
+use thiserror::Error;
+use wgt::WasmNotSendSync;
+
+pub const MAX_CONCURRENT_SHADER_STAGES: usize = 2;
+pub const MAX_ANISOTROPY: u8 = 16;
+pub const MAX_BIND_GROUPS: usize = 8;
+pub const MAX_VERTEX_BUFFERS: usize = 16;
+pub const MAX_COLOR_ATTACHMENTS: usize = 8;
+pub const MAX_MIP_LEVELS: u32 = 16;
+pub const QUERY_SIZE: wgt::BufferAddress = 8;
+
+pub type Label<'a> = Option<&'a str>;
+pub type MemoryRange = Range<wgt::BufferAddress>;
+pub type FenceValue = u64;
+
+pub type DropGuard = Box<dyn std::any::Any + Send + Sync>;
+
+#[derive(Clone, Debug, PartialEq, Eq, Error)]
+pub enum DeviceError {
+    #[error("Out of memory")]
+    OutOfMemory,
+    #[error("Device is lost")]
+    Lost,
+    #[error("Creation of a resource failed for a reason other than running out of memory.")]
+    ResourceCreationFailed,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Error)]
+pub enum ShaderError {
+    #[error("Compilation failed: {0:?}")]
+    Compilation(String),
+    #[error(transparent)]
+    Device(#[from] DeviceError),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Error)]
+pub enum PipelineError {
+    #[error("Linkage failed for stage {0:?}: {1}")]
+    Linkage(wgt::ShaderStages, String),
+    #[error("Entry point for stage {0:?} is invalid")]
+    EntryPoint(naga::ShaderStage),
+    #[error(transparent)]
+    Device(#[from] DeviceError),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Error)]
+pub enum SurfaceError {
+    #[error("Surface is lost")]
+    Lost,
+    #[error("Surface is outdated, needs to be re-created")]
+    Outdated,
+    #[error(transparent)]
+    Device(#[from] DeviceError),
+    #[error("Other reason: {0}")]
+    Other(&'static str),
+}
+
+#[derive(Clone, Debug, Error)]
+#[error("{message}")]
+pub struct InstanceError {
+    message: String,
+
+    #[source]
+    source: Option<Arc<dyn std::error::Error + Send + Sync + 'static>>,
+}
+
+impl InstanceError {
+    #[allow(dead_code)]                                   
+    pub(crate) fn new(message: String) -> Self {
+        Self {
+            message,
+            source: None,
+        }
+    }
+    #[allow(dead_code)]                                   
+    pub(crate) fn with_source(
+        message: String,
+        source: impl std::error::Error + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            message,
+            source: Some(Arc::new(source)),
+        }
+    }
+}
+
+pub trait Api: Clone + fmt::Debug + Sized {
+    type Instance: Instance<Self>;
+    type Surface: Surface<Self>;
+    type Adapter: Adapter<Self>;
+    type Device: Device<Self>;
+
+    type Queue: Queue<Self>;
+    type CommandEncoder: CommandEncoder<Self>;
+    type CommandBuffer: WasmNotSendSync + fmt::Debug;
+
+    type Buffer: fmt::Debug + WasmNotSendSync + 'static;
+    type Texture: fmt::Debug + WasmNotSendSync + 'static;
+    type SurfaceTexture: fmt::Debug + WasmNotSendSync + Borrow<Self::Texture>;
+    type TextureView: fmt::Debug + WasmNotSendSync;
+    type Sampler: fmt::Debug + WasmNotSendSync;
+    type QuerySet: fmt::Debug + WasmNotSendSync;
+    type Fence: fmt::Debug + WasmNotSendSync;
+
+    type BindGroupLayout: fmt::Debug + WasmNotSendSync;
+    type BindGroup: fmt::Debug + WasmNotSendSync;
+    type PipelineLayout: fmt::Debug + WasmNotSendSync;
+    type ShaderModule: fmt::Debug + WasmNotSendSync;
+    type RenderPipeline: fmt::Debug + WasmNotSendSync;
+    type ComputePipeline: fmt::Debug + WasmNotSendSync;
+
+    type AccelerationStructure: fmt::Debug + WasmNotSendSync + 'static;
+}
+
+pub trait Instance<A: Api>: Sized + WasmNotSendSync {
+    unsafe fn init(desc: &InstanceDescriptor) -> Result<Self, InstanceError>;
+    unsafe fn create_surface(
+        &self,
+        display_handle: raw_window_handle::RawDisplayHandle,
+        window_handle: raw_window_handle::RawWindowHandle,
+    ) -> Result<A::Surface, InstanceError>;
+    unsafe fn destroy_surface(&self, surface: A::Surface);
+    unsafe fn enumerate_adapters(&self) -> Vec<ExposedAdapter<A>>;
+}
+
+pub trait Surface<A: Api>: WasmNotSendSync {
+    unsafe fn configure(
+        &self,
+        device: &A::Device,
+        config: &SurfaceConfiguration,
+    ) -> Result<(), SurfaceError>;
+
+    unsafe fn unconfigure(&self, device: &A::Device);
+
+    unsafe fn acquire_texture(
+        &self,
+        timeout: Option<std::time::Duration>,
+    ) -> Result<Option<AcquiredSurfaceTexture<A>>, SurfaceError>;
+    unsafe fn discard_texture(&self, texture: A::SurfaceTexture);
+}
+
+pub trait Adapter<A: Api>: WasmNotSendSync {
+    unsafe fn open(
+        &self,
+        features: wgt::Features,
+        limits: &wgt::Limits,
+    ) -> Result<OpenDevice<A>, DeviceError>;
+
+    unsafe fn texture_format_capabilities(
+        &self,
+        format: wgt::TextureFormat,
+    ) -> TextureFormatCapabilities;
+
+    unsafe fn surface_capabilities(&self, surface: &A::Surface) -> Option<SurfaceCapabilities>;
+
+    unsafe fn get_presentation_timestamp(&self) -> wgt::PresentationTimestamp;
+}
+
+pub trait Device<A: Api>: WasmNotSendSync {
+    unsafe fn exit(self, queue: A::Queue);
+    unsafe fn create_buffer(&self, desc: &BufferDescriptor) -> Result<A::Buffer, DeviceError>;
+    unsafe fn destroy_buffer(&self, buffer: A::Buffer);
+    unsafe fn map_buffer(
+        &self,
+        buffer: &A::Buffer,
+        range: MemoryRange,
+    ) -> Result<BufferMapping, DeviceError>;
+    unsafe fn unmap_buffer(&self, buffer: &A::Buffer) -> Result<(), DeviceError>;
+    unsafe fn flush_mapped_ranges<I>(&self, buffer: &A::Buffer, ranges: I)
+    where
+        I: Iterator<Item = MemoryRange>;
+    unsafe fn invalidate_mapped_ranges<I>(&self, buffer: &A::Buffer, ranges: I)
+    where
+        I: Iterator<Item = MemoryRange>;
+
+    unsafe fn create_texture(&self, desc: &TextureDescriptor) -> Result<A::Texture, DeviceError>;
+    unsafe fn destroy_texture(&self, texture: A::Texture);
+    unsafe fn create_texture_view(
+        &self,
+        texture: &A::Texture,
+        desc: &TextureViewDescriptor,
+    ) -> Result<A::TextureView, DeviceError>;
+    unsafe fn destroy_texture_view(&self, view: A::TextureView);
+    unsafe fn create_sampler(&self, desc: &SamplerDescriptor) -> Result<A::Sampler, DeviceError>;
+    unsafe fn destroy_sampler(&self, sampler: A::Sampler);
+
+    unsafe fn create_command_encoder(
+        &self,
+        desc: &CommandEncoderDescriptor<A>,
+    ) -> Result<A::CommandEncoder, DeviceError>;
+    unsafe fn destroy_command_encoder(&self, pool: A::CommandEncoder);
+
+    unsafe fn create_bind_group_layout(
+        &self,
+        desc: &BindGroupLayoutDescriptor,
+    ) -> Result<A::BindGroupLayout, DeviceError>;
+    unsafe fn destroy_bind_group_layout(&self, bg_layout: A::BindGroupLayout);
+    unsafe fn create_pipeline_layout(
+        &self,
+        desc: &PipelineLayoutDescriptor<A>,
+    ) -> Result<A::PipelineLayout, DeviceError>;
+    unsafe fn destroy_pipeline_layout(&self, pipeline_layout: A::PipelineLayout);
+    unsafe fn create_bind_group(
+        &self,
+        desc: &BindGroupDescriptor<A>,
+    ) -> Result<A::BindGroup, DeviceError>;
+    unsafe fn destroy_bind_group(&self, group: A::BindGroup);
+
+    unsafe fn create_shader_module(
+        &self,
+        desc: &ShaderModuleDescriptor,
+        shader: ShaderInput,
+    ) -> Result<A::ShaderModule, ShaderError>;
+    unsafe fn destroy_shader_module(&self, module: A::ShaderModule);
+    unsafe fn create_render_pipeline(
+        &self,
+        desc: &RenderPipelineDescriptor<A>,
+    ) -> Result<A::RenderPipeline, PipelineError>;
+    unsafe fn destroy_render_pipeline(&self, pipeline: A::RenderPipeline);
+    unsafe fn create_compute_pipeline(
+        &self,
+        desc: &ComputePipelineDescriptor<A>,
+    ) -> Result<A::ComputePipeline, PipelineError>;
+    unsafe fn destroy_compute_pipeline(&self, pipeline: A::ComputePipeline);
+
+    unsafe fn create_query_set(
+        &self,
+        desc: &wgt::QuerySetDescriptor<Label>,
+    ) -> Result<A::QuerySet, DeviceError>;
+    unsafe fn destroy_query_set(&self, set: A::QuerySet);
+    unsafe fn create_fence(&self) -> Result<A::Fence, DeviceError>;
+    unsafe fn destroy_fence(&self, fence: A::Fence);
+    unsafe fn get_fence_value(&self, fence: &A::Fence) -> Result<FenceValue, DeviceError>;
+    unsafe fn wait(
+        &self,
+        fence: &A::Fence,
+        value: FenceValue,
+        timeout_ms: u32,
+    ) -> Result<bool, DeviceError>;
+
+    unsafe fn start_capture(&self) -> bool;
+    unsafe fn stop_capture(&self);
+
+    unsafe fn create_acceleration_structure(
+        &self,
+        desc: &AccelerationStructureDescriptor,
+    ) -> Result<A::AccelerationStructure, DeviceError>;
+    unsafe fn get_acceleration_structure_build_sizes(
+        &self,
+        desc: &GetAccelerationStructureBuildSizesDescriptor<A>,
+    ) -> AccelerationStructureBuildSizes;
+    unsafe fn get_acceleration_structure_device_address(
+        &self,
+        acceleration_structure: &A::AccelerationStructure,
+    ) -> wgt::BufferAddress;
+    unsafe fn destroy_acceleration_structure(
+        &self,
+        acceleration_structure: A::AccelerationStructure,
+    );
+}
+
+pub trait Queue<A: Api>: WasmNotSendSync {
+    unsafe fn submit(
+        &self,
+        command_buffers: &[&A::CommandBuffer],
+        signal_fence: Option<(&mut A::Fence, FenceValue)>,
+    ) -> Result<(), DeviceError>;
+    unsafe fn present(
+        &self,
+        surface: &A::Surface,
+        texture: A::SurfaceTexture,
+    ) -> Result<(), SurfaceError>;
+    unsafe fn get_timestamp_period(&self) -> f32;
+}
+
+pub trait CommandEncoder<A: Api>: WasmNotSendSync + fmt::Debug {
+    unsafe fn begin_encoding(&mut self, label: Label) -> Result<(), DeviceError>;
+    unsafe fn discard_encoding(&mut self);
+    unsafe fn end_encoding(&mut self) -> Result<A::CommandBuffer, DeviceError>;
+    unsafe fn reset_all<I>(&mut self, command_buffers: I)
+    where
+        I: Iterator<Item = A::CommandBuffer>;
+
+    unsafe fn transition_buffers<'a, T>(&mut self, barriers: T)
+    where
+        T: Iterator<Item = BufferBarrier<'a, A>>;
+
+    unsafe fn transition_textures<'a, T>(&mut self, barriers: T)
+    where
+        T: Iterator<Item = TextureBarrier<'a, A>>;
+
+
+    unsafe fn clear_buffer(&mut self, buffer: &A::Buffer, range: MemoryRange);
+
+    unsafe fn copy_buffer_to_buffer<T>(&mut self, src: &A::Buffer, dst: &A::Buffer, regions: T)
+    where
+        T: Iterator<Item = BufferCopy>;
+
+    #[cfg(webgl)]
+    unsafe fn copy_external_image_to_texture<T>(
+        &mut self,
+        src: &wgt::ImageCopyExternalImage,
+        dst: &A::Texture,
+        dst_premultiplication: bool,
+        regions: T,
+    ) where
+        T: Iterator<Item = TextureCopy>;
+
+    unsafe fn copy_texture_to_texture<T>(
+        &mut self,
+        src: &A::Texture,
+        src_usage: TextureUses,
+        dst: &A::Texture,
+        regions: T,
+    ) where
+        T: Iterator<Item = TextureCopy>;
+
+    unsafe fn copy_buffer_to_texture<T>(&mut self, src: &A::Buffer, dst: &A::Texture, regions: T)
+    where
+        T: Iterator<Item = BufferTextureCopy>;
+
+    unsafe fn copy_texture_to_buffer<T>(
+        &mut self,
+        src: &A::Texture,
+        src_usage: TextureUses,
+        dst: &A::Buffer,
+        regions: T,
+    ) where
+        T: Iterator<Item = BufferTextureCopy>;
+
+
+    unsafe fn set_bind_group(
+        &mut self,
+        layout: &A::PipelineLayout,
+        index: u32,
+        group: &A::BindGroup,
+        dynamic_offsets: &[wgt::DynamicOffset],
+    );
+
+    unsafe fn set_push_constants(
+        &mut self,
+        layout: &A::PipelineLayout,
+        stages: wgt::ShaderStages,
+        offset_bytes: u32,
+        data: &[u32],
+    );
+
+    unsafe fn insert_debug_marker(&mut self, label: &str);
+    unsafe fn begin_debug_marker(&mut self, group_label: &str);
+    unsafe fn end_debug_marker(&mut self);
+
+
+    unsafe fn begin_query(&mut self, set: &A::QuerySet, index: u32);
+    unsafe fn end_query(&mut self, set: &A::QuerySet, index: u32);
+    unsafe fn write_timestamp(&mut self, set: &A::QuerySet, index: u32);
+    unsafe fn reset_queries(&mut self, set: &A::QuerySet, range: Range<u32>);
+    unsafe fn copy_query_results(
+        &mut self,
+        set: &A::QuerySet,
+        range: Range<u32>,
+        buffer: &A::Buffer,
+        offset: wgt::BufferAddress,
+        stride: wgt::BufferSize,
+    );
+
+
+    unsafe fn begin_render_pass(&mut self, desc: &RenderPassDescriptor<A>);
+    unsafe fn end_render_pass(&mut self);
+
+    unsafe fn set_render_pipeline(&mut self, pipeline: &A::RenderPipeline);
+
+    unsafe fn set_index_buffer<'a>(
+        &mut self,
+        binding: BufferBinding<'a, A>,
+        format: wgt::IndexFormat,
+    );
+    unsafe fn set_vertex_buffer<'a>(&mut self, index: u32, binding: BufferBinding<'a, A>);
+    unsafe fn set_viewport(&mut self, rect: &Rect<f32>, depth_range: Range<f32>);
+    unsafe fn set_scissor_rect(&mut self, rect: &Rect<u32>);
+    unsafe fn set_stencil_reference(&mut self, value: u32);
+    unsafe fn set_blend_constants(&mut self, color: &[f32; 4]);
+
+    unsafe fn draw(
+        &mut self,
+        first_vertex: u32,
+        vertex_count: u32,
+        first_instance: u32,
+        instance_count: u32,
+    );
+    unsafe fn draw_indexed(
+        &mut self,
+        first_index: u32,
+        index_count: u32,
+        base_vertex: i32,
+        first_instance: u32,
+        instance_count: u32,
+    );
+    unsafe fn draw_indirect(
+        &mut self,
+        buffer: &A::Buffer,
+        offset: wgt::BufferAddress,
+        draw_count: u32,
+    );
+    unsafe fn draw_indexed_indirect(
+        &mut self,
+        buffer: &A::Buffer,
+        offset: wgt::BufferAddress,
+        draw_count: u32,
+    );
+    unsafe fn draw_indirect_count(
+        &mut self,
+        buffer: &A::Buffer,
+        offset: wgt::BufferAddress,
+        count_buffer: &A::Buffer,
+        count_offset: wgt::BufferAddress,
+        max_count: u32,
+    );
+    unsafe fn draw_indexed_indirect_count(
+        &mut self,
+        buffer: &A::Buffer,
+        offset: wgt::BufferAddress,
+        count_buffer: &A::Buffer,
+        count_offset: wgt::BufferAddress,
+        max_count: u32,
+    );
+
+
+    unsafe fn begin_compute_pass(&mut self, desc: &ComputePassDescriptor<A>);
+    unsafe fn end_compute_pass(&mut self);
+
+    unsafe fn set_compute_pipeline(&mut self, pipeline: &A::ComputePipeline);
+
+    unsafe fn dispatch(&mut self, count: [u32; 3]);
+    unsafe fn dispatch_indirect(&mut self, buffer: &A::Buffer, offset: wgt::BufferAddress);
+
+    unsafe fn build_acceleration_structures<'a, T>(
+        &mut self,
+        descriptor_count: u32,
+        descriptors: T,
+    ) where
+        A: 'a,
+        T: IntoIterator<Item = BuildAccelerationStructureDescriptor<'a, A>>;
+
+    unsafe fn place_acceleration_structure_barrier(
+        &mut self,
+        barrier: AccelerationStructureBarrier,
+    );
+}
+
+bitflags!(
+    #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+    pub struct PipelineLayoutFlags: u32 {
+        const FIRST_VERTEX_INSTANCE = 1 << 0;
+        const NUM_WORK_GROUPS = 1 << 1;
+    }
+);
+
+bitflags!(
+    #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+    pub struct BindGroupLayoutFlags: u32 {
+        const PARTIALLY_BOUND = 1 << 0;
+    }
+);
+
+bitflags!(
+    #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+    pub struct TextureFormatCapabilities: u32 {
+        const SAMPLED = 1 << 0;
+        const SAMPLED_LINEAR = 1 << 1;
+        const SAMPLED_MINMAX = 1 << 2;
+
+        const STORAGE = 1 << 3;
+        const STORAGE_READ_WRITE = 1 << 4;
+        const STORAGE_ATOMIC = 1 << 5;
+
+        const COLOR_ATTACHMENT = 1 << 6;
+        const COLOR_ATTACHMENT_BLEND = 1 << 7;
+        const DEPTH_STENCIL_ATTACHMENT = 1 << 8;
+
+        const MULTISAMPLE_X2   = 1 << 9;
+        const MULTISAMPLE_X4   = 1 << 10;
+        const MULTISAMPLE_X8   = 1 << 11;
+        const MULTISAMPLE_X16  = 1 << 12;
+
+        const MULTISAMPLE_RESOLVE = 1 << 13;
+
+        const COPY_SRC = 1 << 14;
+        const COPY_DST = 1 << 15;
+    }
+);
+
+bitflags!(
+    #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+    pub struct FormatAspects: u8 {
+        const COLOR = 1 << 0;
+        const DEPTH = 1 << 1;
+        const STENCIL = 1 << 2;
+        const PLANE_0 = 1 << 3;
+        const PLANE_1 = 1 << 4;
+        const PLANE_2 = 1 << 5;
+
+        const DEPTH_STENCIL = Self::DEPTH.bits() | Self::STENCIL.bits();
+    }
+);
+
+impl FormatAspects {
+    pub fn new(format: wgt::TextureFormat, aspect: wgt::TextureAspect) -> Self {
+        let aspect_mask = match aspect {
+            wgt::TextureAspect::All => Self::all(),
+            wgt::TextureAspect::DepthOnly => Self::DEPTH,
+            wgt::TextureAspect::StencilOnly => Self::STENCIL,
+            wgt::TextureAspect::Plane0 => Self::PLANE_0,
+            wgt::TextureAspect::Plane1 => Self::PLANE_1,
+            wgt::TextureAspect::Plane2 => Self::PLANE_2,
+        };
+        Self::from(format) & aspect_mask
+    }
+
+    pub fn is_one(&self) -> bool {
+        self.bits().count_ones() == 1
+    }
+
+    pub fn map(&self) -> wgt::TextureAspect {
+        match *self {
+            Self::COLOR => wgt::TextureAspect::All,
+            Self::DEPTH => wgt::TextureAspect::DepthOnly,
+            Self::STENCIL => wgt::TextureAspect::StencilOnly,
+            Self::PLANE_0 => wgt::TextureAspect::Plane0,
+            Self::PLANE_1 => wgt::TextureAspect::Plane1,
+            Self::PLANE_2 => wgt::TextureAspect::Plane2,
+            _ => unreachable!(),
+        }
+    }
+}
+
+impl From<wgt::TextureFormat> for FormatAspects {
+    fn from(format: wgt::TextureFormat) -> Self {
+        match format {
+            wgt::TextureFormat::Stencil8 => Self::STENCIL,
+            wgt::TextureFormat::Depth16Unorm
+            | wgt::TextureFormat::Depth32Float
+            | wgt::TextureFormat::Depth24Plus => Self::DEPTH,
+            wgt::TextureFormat::Depth32FloatStencil8 | wgt::TextureFormat::Depth24PlusStencil8 => {
+                Self::DEPTH_STENCIL
+            }
+            wgt::TextureFormat::NV12 => Self::PLANE_0 | Self::PLANE_1,
+            _ => Self::COLOR,
+        }
+    }
+}
+
+bitflags!(
+    #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+    pub struct MemoryFlags: u32 {
+        const TRANSIENT = 1 << 0;
+        const PREFER_COHERENT = 1 << 1;
+    }
+);
+
+
+bitflags!(
+    #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+    pub struct AttachmentOps: u8 {
+        const LOAD = 1 << 0;
+        const STORE = 1 << 1;
+    }
+);
+
+bitflags::bitflags! {
+    #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+    pub struct BufferUses: u16 {
+        const MAP_READ = 1 << 0;
+        const MAP_WRITE = 1 << 1;
+        const COPY_SRC = 1 << 2;
+        const COPY_DST = 1 << 3;
+        const INDEX = 1 << 4;
+        const VERTEX = 1 << 5;
+        const UNIFORM = 1 << 6;
+        const STORAGE_READ = 1 << 7;
+        const STORAGE_READ_WRITE = 1 << 8;
+        const INDIRECT = 1 << 9;
+        const QUERY_RESOLVE = 1 << 10;
+        const ACCELERATION_STRUCTURE_SCRATCH = 1 << 11;
+        const BOTTOM_LEVEL_ACCELERATION_STRUCTURE_INPUT = 1 << 12;
+        const TOP_LEVEL_ACCELERATION_STRUCTURE_INPUT = 1 << 13;
+        const INCLUSIVE = Self::MAP_READ.bits() | Self::COPY_SRC.bits() |
+            Self::INDEX.bits() | Self::VERTEX.bits() | Self::UNIFORM.bits() |
+            Self::STORAGE_READ.bits() | Self::INDIRECT.bits() | Self::BOTTOM_LEVEL_ACCELERATION_STRUCTURE_INPUT.bits() | Self::TOP_LEVEL_ACCELERATION_STRUCTURE_INPUT.bits();
+        const EXCLUSIVE = Self::MAP_WRITE.bits() | Self::COPY_DST.bits() | Self::STORAGE_READ_WRITE.bits() | Self::ACCELERATION_STRUCTURE_SCRATCH.bits();
+        const ORDERED = Self::INCLUSIVE.bits() | Self::MAP_WRITE.bits();
+    }
+}
+
+bitflags::bitflags! {
+    #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+    pub struct TextureUses: u16 {
+        const UNINITIALIZED = 1 << 0;
+        const PRESENT = 1 << 1;
+        const COPY_SRC = 1 << 2;
+        const COPY_DST = 1 << 3;
+        const RESOURCE = 1 << 4;
+        const COLOR_TARGET = 1 << 5;
+        const DEPTH_STENCIL_READ = 1 << 6;
+        const DEPTH_STENCIL_WRITE = 1 << 7;
+        const STORAGE_READ = 1 << 8;
+        const STORAGE_READ_WRITE = 1 << 9;
+        const INCLUSIVE = Self::COPY_SRC.bits() | Self::RESOURCE.bits() | Self::DEPTH_STENCIL_READ.bits();
+        const EXCLUSIVE = Self::COPY_DST.bits() | Self::COLOR_TARGET.bits() | Self::DEPTH_STENCIL_WRITE.bits() | Self::STORAGE_READ.bits() | Self::STORAGE_READ_WRITE.bits() | Self::PRESENT.bits();
+        const ORDERED = Self::INCLUSIVE.bits() | Self::COLOR_TARGET.bits() | Self::DEPTH_STENCIL_WRITE.bits() | Self::STORAGE_READ.bits();
+
+        const COMPLEX = 1 << 10;
+        const UNKNOWN = 1 << 11;
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct InstanceDescriptor<'a> {
+    pub name: &'a str,
+    pub flags: wgt::InstanceFlags,
+    pub dx12_shader_compiler: wgt::Dx12Compiler,
+    pub gles_minor_version: wgt::Gles3MinorVersion,
+}
+
+#[derive(Clone, Debug)]
+pub struct Alignments {
+    pub buffer_copy_offset: wgt::BufferSize,
+    pub buffer_copy_pitch: wgt::BufferSize,
+}
+
+#[derive(Clone, Debug)]
+pub struct Capabilities {
+    pub limits: wgt::Limits,
+    pub alignments: Alignments,
+    pub downlevel: wgt::DownlevelCapabilities,
+}
+
+#[derive(Debug)]
+pub struct ExposedAdapter<A: Api> {
+    pub adapter: A::Adapter,
+    pub info: wgt::AdapterInfo,
+    pub features: wgt::Features,
+    pub capabilities: Capabilities,
+}
+
+#[derive(Debug, Clone)]
+pub struct SurfaceCapabilities {
+    pub formats: Vec<wgt::TextureFormat>,
+
+    pub maximum_frame_latency: RangeInclusive<u32>,
+
+    pub current_extent: Option<wgt::Extent3d>,
+
+    pub usage: TextureUses,
+
+    pub present_modes: Vec<wgt::PresentMode>,
+
+    pub composite_alpha_modes: Vec<wgt::CompositeAlphaMode>,
+}
+
+#[derive(Debug)]
+pub struct AcquiredSurfaceTexture<A: Api> {
+    pub texture: A::SurfaceTexture,
+    pub suboptimal: bool,
+}
+
+#[derive(Debug)]
+pub struct OpenDevice<A: Api> {
+    pub device: A::Device,
+    pub queue: A::Queue,
+}
+
+#[derive(Clone, Debug)]
+pub struct BufferMapping {
+    pub ptr: NonNull<u8>,
+    pub is_coherent: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct BufferDescriptor<'a> {
+    pub label: Label<'a>,
+    pub size: wgt::BufferAddress,
+    pub usage: BufferUses,
+    pub memory_flags: MemoryFlags,
+}
+
+#[derive(Clone, Debug)]
+pub struct TextureDescriptor<'a> {
+    pub label: Label<'a>,
+    pub size: wgt::Extent3d,
+    pub mip_level_count: u32,
+    pub sample_count: u32,
+    pub dimension: wgt::TextureDimension,
+    pub format: wgt::TextureFormat,
+    pub usage: TextureUses,
+    pub memory_flags: MemoryFlags,
+    pub view_formats: Vec<wgt::TextureFormat>,
+}
+
+impl TextureDescriptor<'_> {
+    pub fn copy_extent(&self) -> CopyExtent {
+        CopyExtent::map_extent_to_copy_size(&self.size, self.dimension)
+    }
+
+    pub fn is_cube_compatible(&self) -> bool {
+        self.dimension == wgt::TextureDimension::D2
+            && self.size.depth_or_array_layers % 6 == 0
+            && self.sample_count == 1
+            && self.size.width == self.size.height
+    }
+
+    pub fn array_layer_count(&self) -> u32 {
+        match self.dimension {
+            wgt::TextureDimension::D1 | wgt::TextureDimension::D3 => 1,
+            wgt::TextureDimension::D2 => self.size.depth_or_array_layers,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct TextureViewDescriptor<'a> {
+    pub label: Label<'a>,
+    pub format: wgt::TextureFormat,
+    pub dimension: wgt::TextureViewDimension,
+    pub usage: TextureUses,
+    pub range: wgt::ImageSubresourceRange,
+}
+
+#[derive(Clone, Debug)]
+pub struct SamplerDescriptor<'a> {
+    pub label: Label<'a>,
+    pub address_modes: [wgt::AddressMode; 3],
+    pub mag_filter: wgt::FilterMode,
+    pub min_filter: wgt::FilterMode,
+    pub mipmap_filter: wgt::FilterMode,
+    pub lod_clamp: Range<f32>,
+    pub compare: Option<wgt::CompareFunction>,
+    pub anisotropy_clamp: u16,
+    pub border_color: Option<wgt::SamplerBorderColor>,
+}
+
+#[derive(Clone, Debug)]
+pub struct BindGroupLayoutDescriptor<'a> {
+    pub label: Label<'a>,
+    pub flags: BindGroupLayoutFlags,
+    pub entries: &'a [wgt::BindGroupLayoutEntry],
+}
+
+#[derive(Clone, Debug)]
+pub struct PipelineLayoutDescriptor<'a, A: Api> {
+    pub label: Label<'a>,
+    pub flags: PipelineLayoutFlags,
+    pub bind_group_layouts: &'a [&'a A::BindGroupLayout],
+    pub push_constant_ranges: &'a [wgt::PushConstantRange],
+}
+
+#[derive(Debug)]
+pub struct BufferBinding<'a, A: Api> {
+    pub buffer: &'a A::Buffer,
+
+    pub offset: wgt::BufferAddress,
+
+    pub size: Option<wgt::BufferSize>,
+}
+
+impl<A: Api> Clone for BufferBinding<'_, A> {
+    fn clone(&self) -> Self {
+        Self {
+            buffer: self.buffer,
+            offset: self.offset,
+            size: self.size,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct TextureBinding<'a, A: Api> {
+    pub view: &'a A::TextureView,
+    pub usage: TextureUses,
+}
+
+impl<A: Api> Clone for TextureBinding<'_, A> {
+    fn clone(&self) -> Self {
+        Self {
+            view: self.view,
+            usage: self.usage,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct BindGroupEntry {
+    pub binding: u32,
+    pub resource_index: u32,
+    pub count: u32,
+}
+
+#[derive(Clone, Debug)]
+pub struct BindGroupDescriptor<'a, A: Api> {
+    pub label: Label<'a>,
+    pub layout: &'a A::BindGroupLayout,
+    pub buffers: &'a [BufferBinding<'a, A>],
+    pub samplers: &'a [&'a A::Sampler],
+    pub textures: &'a [TextureBinding<'a, A>],
+    pub entries: &'a [BindGroupEntry],
+    pub acceleration_structures: &'a [&'a A::AccelerationStructure],
+}
+
+#[derive(Clone, Debug)]
+pub struct CommandEncoderDescriptor<'a, A: Api> {
+    pub label: Label<'a>,
+    pub queue: &'a A::Queue,
+}
+
+pub struct NagaShader {
+    pub module: Cow<'static, naga::Module>,
+    pub info: naga::valid::ModuleInfo,
+    pub debug_source: Option<DebugSource>,
+}
+
+impl fmt::Debug for NagaShader {
+    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        write!(formatter, "Naga shader")
+    }
+}
+
+#[allow(clippy::large_enum_variant)]
+pub enum ShaderInput<'a> {
+    Naga(NagaShader),
+    SpirV(&'a [u32]),
+}
+
+pub struct ShaderModuleDescriptor<'a> {
+    pub label: Label<'a>,
+    pub runtime_checks: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct DebugSource {
+    pub file_name: Cow<'static, str>,
+    pub source_code: Cow<'static, str>,
+}
+
+#[derive(Debug)]
+pub struct ProgrammableStage<'a, A: Api> {
+    pub module: &'a A::ShaderModule,
+    pub entry_point: &'a str,
+}
+
+impl<A: Api> Clone for ProgrammableStage<'_, A> {
+    fn clone(&self) -> Self {
+        Self {
+            module: self.module,
+            entry_point: self.entry_point,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct ComputePipelineDescriptor<'a, A: Api> {
+    pub label: Label<'a>,
+    pub layout: &'a A::PipelineLayout,
+    pub stage: ProgrammableStage<'a, A>,
+}
+
+#[derive(Clone, Debug)]
+pub struct VertexBufferLayout<'a> {
+    pub array_stride: wgt::BufferAddress,
+    pub step_mode: wgt::VertexStepMode,
+    pub attributes: &'a [wgt::VertexAttribute],
+}
+
+#[derive(Clone, Debug)]
+pub struct RenderPipelineDescriptor<'a, A: Api> {
+    pub label: Label<'a>,
+    pub layout: &'a A::PipelineLayout,
+    pub vertex_buffers: &'a [VertexBufferLayout<'a>],
+    pub vertex_stage: ProgrammableStage<'a, A>,
+    pub primitive: wgt::PrimitiveState,
+    pub depth_stencil: Option<wgt::DepthStencilState>,
+    pub multisample: wgt::MultisampleState,
+    pub fragment_stage: Option<ProgrammableStage<'a, A>>,
+    pub color_targets: &'a [Option<wgt::ColorTargetState>],
+    pub multiview: Option<NonZeroU32>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SurfaceConfiguration {
+    pub maximum_frame_latency: u32,
+    pub present_mode: wgt::PresentMode,
+    pub composite_alpha_mode: wgt::CompositeAlphaMode,
+    pub format: wgt::TextureFormat,
+    pub extent: wgt::Extent3d,
+    pub usage: TextureUses,
+    pub view_formats: Vec<wgt::TextureFormat>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Rect<T> {
+    pub x: T,
+    pub y: T,
+    pub w: T,
+    pub h: T,
+}
+
+#[derive(Debug, Clone)]
+pub struct BufferBarrier<'a, A: Api> {
+    pub buffer: &'a A::Buffer,
+    pub usage: Range<BufferUses>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TextureBarrier<'a, A: Api> {
+    pub texture: &'a A::Texture,
+    pub range: wgt::ImageSubresourceRange,
+    pub usage: Range<TextureUses>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct BufferCopy {
+    pub src_offset: wgt::BufferAddress,
+    pub dst_offset: wgt::BufferAddress,
+    pub size: wgt::BufferSize,
+}
+
+#[derive(Clone, Debug)]
+pub struct TextureCopyBase {
+    pub mip_level: u32,
+    pub array_layer: u32,
+    pub origin: wgt::Origin3d,
+    pub aspect: FormatAspects,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct CopyExtent {
+    pub width: u32,
+    pub height: u32,
+    pub depth: u32,
+}
+
+#[derive(Clone, Debug)]
+pub struct TextureCopy {
+    pub src_base: TextureCopyBase,
+    pub dst_base: TextureCopyBase,
+    pub size: CopyExtent,
+}
+
+#[derive(Clone, Debug)]
+pub struct BufferTextureCopy {
+    pub buffer_layout: wgt::ImageDataLayout,
+    pub texture_base: TextureCopyBase,
+    pub size: CopyExtent,
+}
+
+#[derive(Debug)]
+pub struct Attachment<'a, A: Api> {
+    pub view: &'a A::TextureView,
+    pub usage: TextureUses,
+}
+
+impl<A: Api> Clone for Attachment<'_, A> {
+    fn clone(&self) -> Self {
+        Self {
+            view: self.view,
+            usage: self.usage,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct ColorAttachment<'a, A: Api> {
+    pub target: Attachment<'a, A>,
+    pub resolve_target: Option<Attachment<'a, A>>,
+    pub ops: AttachmentOps,
+    pub clear_value: wgt::Color,
+}
+
+impl<A: Api> Clone for ColorAttachment<'_, A> {
+    fn clone(&self) -> Self {
+        Self {
+            target: self.target.clone(),
+            resolve_target: self.resolve_target.clone(),
+            ops: self.ops,
+            clear_value: self.clear_value,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct DepthStencilAttachment<'a, A: Api> {
+    pub target: Attachment<'a, A>,
+    pub depth_ops: AttachmentOps,
+    pub stencil_ops: AttachmentOps,
+    pub clear_value: (f32, u32),
+}
+
+#[derive(Debug)]
+pub struct RenderPassTimestampWrites<'a, A: Api> {
+    pub query_set: &'a A::QuerySet,
+    pub beginning_of_pass_write_index: Option<u32>,
+    pub end_of_pass_write_index: Option<u32>,
+}
+
+impl<A: Api> Clone for RenderPassTimestampWrites<'_, A> {
+    fn clone(&self) -> Self {
+        Self {
+            query_set: self.query_set,
+            beginning_of_pass_write_index: self.beginning_of_pass_write_index,
+            end_of_pass_write_index: self.end_of_pass_write_index,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct RenderPassDescriptor<'a, A: Api> {
+    pub label: Label<'a>,
+    pub extent: wgt::Extent3d,
+    pub sample_count: u32,
+    pub color_attachments: &'a [Option<ColorAttachment<'a, A>>],
+    pub depth_stencil_attachment: Option<DepthStencilAttachment<'a, A>>,
+    pub multiview: Option<NonZeroU32>,
+    pub timestamp_writes: Option<RenderPassTimestampWrites<'a, A>>,
+    pub occlusion_query_set: Option<&'a A::QuerySet>,
+}
+
+#[derive(Debug)]
+pub struct ComputePassTimestampWrites<'a, A: Api> {
+    pub query_set: &'a A::QuerySet,
+    pub beginning_of_pass_write_index: Option<u32>,
+    pub end_of_pass_write_index: Option<u32>,
+}
+
+impl<A: Api> Clone for ComputePassTimestampWrites<'_, A> {
+    fn clone(&self) -> Self {
+        Self {
+            query_set: self.query_set,
+            beginning_of_pass_write_index: self.beginning_of_pass_write_index,
+            end_of_pass_write_index: self.end_of_pass_write_index,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct ComputePassDescriptor<'a, A: Api> {
+    pub label: Label<'a>,
+    pub timestamp_writes: Option<ComputePassTimestampWrites<'a, A>>,
+}
+
+pub static VALIDATION_CANARY: ValidationCanary = ValidationCanary {
+    inner: Mutex::new(Vec::new()),
+};
+
+pub struct ValidationCanary {
+    inner: Mutex<Vec<String>>,
+}
+
+impl ValidationCanary {
+    #[allow(dead_code)]                                                
+    fn add(&self, msg: String) {
+        self.inner.lock().push(msg);
+    }
+
+    pub fn get_and_reset(&self) -> Vec<String> {
+        self.inner.lock().drain(..).collect()
+    }
+}
+
+
+
+#[derive(Clone, Debug)]
+pub struct AccelerationStructureDescriptor<'a> {
+    pub label: Label<'a>,
+    pub size: wgt::BufferAddress,
+    pub format: AccelerationStructureFormat,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum AccelerationStructureFormat {
+    TopLevel,
+    BottomLevel,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum AccelerationStructureBuildMode {
+    Build,
+    Update,
+}
+
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub struct AccelerationStructureBuildSizes {
+    pub acceleration_structure_size: wgt::BufferAddress,
+    pub update_scratch_size: wgt::BufferAddress,
+    pub build_scratch_size: wgt::BufferAddress,
+}
+
+#[derive(Clone, Debug)]
+pub struct BuildAccelerationStructureDescriptor<'a, A: Api> {
+    pub entries: &'a AccelerationStructureEntries<'a, A>,
+    pub mode: AccelerationStructureBuildMode,
+    pub flags: AccelerationStructureBuildFlags,
+    pub source_acceleration_structure: Option<&'a A::AccelerationStructure>,
+    pub destination_acceleration_structure: &'a A::AccelerationStructure,
+    pub scratch_buffer: &'a A::Buffer,
+    pub scratch_buffer_offset: wgt::BufferAddress,
+}
+
+#[derive(Clone, Debug)]
+pub struct GetAccelerationStructureBuildSizesDescriptor<'a, A: Api> {
+    pub entries: &'a AccelerationStructureEntries<'a, A>,
+    pub flags: AccelerationStructureBuildFlags,
+}
+
+#[derive(Debug)]
+pub enum AccelerationStructureEntries<'a, A: Api> {
+    Instances(AccelerationStructureInstances<'a, A>),
+    Triangles(Vec<AccelerationStructureTriangles<'a, A>>),
+    AABBs(Vec<AccelerationStructureAABBs<'a, A>>),
+}
+
+#[derive(Clone, Debug)]
+pub struct AccelerationStructureTriangles<'a, A: Api> {
+    pub vertex_buffer: Option<&'a A::Buffer>,
+    pub vertex_format: wgt::VertexFormat,
+    pub first_vertex: u32,
+    pub vertex_count: u32,
+    pub vertex_stride: wgt::BufferAddress,
+    pub indices: Option<AccelerationStructureTriangleIndices<'a, A>>,
+    pub transform: Option<AccelerationStructureTriangleTransform<'a, A>>,
+    pub flags: AccelerationStructureGeometryFlags,
+}
+
+#[derive(Clone, Debug)]
+pub struct AccelerationStructureAABBs<'a, A: Api> {
+    pub buffer: Option<&'a A::Buffer>,
+    pub offset: u32,
+    pub count: u32,
+    pub stride: wgt::BufferAddress,
+    pub flags: AccelerationStructureGeometryFlags,
+}
+
+#[derive(Clone, Debug)]
+pub struct AccelerationStructureInstances<'a, A: Api> {
+    pub buffer: Option<&'a A::Buffer>,
+    pub offset: u32,
+    pub count: u32,
+}
+
+#[derive(Clone, Debug)]
+pub struct AccelerationStructureTriangleIndices<'a, A: Api> {
+    pub format: wgt::IndexFormat,
+    pub buffer: Option<&'a A::Buffer>,
+    pub offset: u32,
+    pub count: u32,
+}
+
+#[derive(Clone, Debug)]
+pub struct AccelerationStructureTriangleTransform<'a, A: Api> {
+    pub buffer: &'a A::Buffer,
+    pub offset: u32,
+}
+
+pub use wgt::AccelerationStructureFlags as AccelerationStructureBuildFlags;
+pub use wgt::AccelerationStructureGeometryFlags;
+
+bitflags::bitflags! {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+    pub struct AccelerationStructureUses: u8 {
+        const BUILD_INPUT = 1 << 0;
+        const BUILD_OUTPUT = 1 << 1;
+        const SHADER_INPUT = 1 << 2;
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct AccelerationStructureBarrier {
+    pub usage: Range<AccelerationStructureUses>,
+}

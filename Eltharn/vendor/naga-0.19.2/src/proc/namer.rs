@@ -1,0 +1,234 @@
+use crate::{arena::Handle, FastHashMap, FastHashSet};
+use std::borrow::Cow;
+use std::hash::{Hash, Hasher};
+
+pub type EntryPointIndex = u16;
+const SEPARATOR: char = '_';
+
+#[derive(Debug, Eq, Hash, PartialEq)]
+pub enum NameKey {
+    Constant(Handle<crate::Constant>),
+    GlobalVariable(Handle<crate::GlobalVariable>),
+    Type(Handle<crate::Type>),
+    StructMember(Handle<crate::Type>, u32),
+    Function(Handle<crate::Function>),
+    FunctionArgument(Handle<crate::Function>, u32),
+    FunctionLocal(Handle<crate::Function>, Handle<crate::LocalVariable>),
+    EntryPoint(EntryPointIndex),
+    EntryPointLocal(EntryPointIndex, Handle<crate::LocalVariable>),
+    EntryPointArgument(EntryPointIndex, u32),
+}
+
+#[derive(Default)]
+pub struct Namer {
+    unique: FastHashMap<String, u32>,
+    keywords: FastHashSet<&'static str>,
+    keywords_case_insensitive: FastHashSet<AsciiUniCase<&'static str>>,
+    reserved_prefixes: Vec<&'static str>,
+}
+
+impl Namer {
+    fn sanitize<'s>(&self, string: &'s str) -> Cow<'s, str> {
+        let string = string
+            .trim_start_matches(|c: char| c.is_numeric())
+            .trim_end_matches(SEPARATOR);
+
+        let base = if !string.is_empty()
+            && !string.contains("__")
+            && string
+                .chars()
+                .all(|c: char| c.is_ascii_alphanumeric() || c == '_')
+        {
+            Cow::Borrowed(string)
+        } else {
+            let mut filtered = string
+                .chars()
+                .filter(|&c| c.is_ascii_alphanumeric() || c == '_')
+                .fold(String::new(), |mut s, c| {
+                    if s.ends_with('_') && c == '_' {
+                        return s;
+                    }
+                    s.push(c);
+                    s
+                });
+            let stripped_len = filtered.trim_end_matches(SEPARATOR).len();
+            filtered.truncate(stripped_len);
+            if filtered.is_empty() {
+                filtered.push_str("unnamed");
+            }
+            Cow::Owned(filtered)
+        };
+
+        for prefix in &self.reserved_prefixes {
+            if base.starts_with(prefix) {
+                return format!("gen_{base}").into();
+            }
+        }
+
+        base
+    }
+
+    pub fn call(&mut self, label_raw: &str) -> String {
+        use std::fmt::Write as _;                             
+
+        let base = self.sanitize(label_raw);
+        debug_assert!(!base.is_empty() && !base.ends_with(SEPARATOR));
+
+        match self.unique.get_mut(base.as_ref()) {
+            Some(count) => {
+                *count += 1;
+                let mut suffixed = base.into_owned();
+                write!(suffixed, "{}{}", SEPARATOR, *count).unwrap();
+                suffixed
+            }
+            None => {
+                let mut suffixed = base.to_string();
+                if base.ends_with(char::is_numeric)
+                    || self.keywords.contains(base.as_ref())
+                    || self
+                        .keywords_case_insensitive
+                        .contains(&AsciiUniCase(base.as_ref()))
+                {
+                    suffixed.push(SEPARATOR);
+                }
+                debug_assert!(!self.keywords.contains::<str>(&suffixed));
+                self.unique.insert(base.into_owned(), 0);
+                suffixed
+            }
+        }
+    }
+
+    pub fn call_or(&mut self, label: &Option<String>, fallback: &str) -> String {
+        self.call(match *label {
+            Some(ref name) => name,
+            None => fallback,
+        })
+    }
+
+    fn namespace(&mut self, capacity: usize, body: impl FnOnce(&mut Self)) {
+        let fresh = FastHashMap::with_capacity_and_hasher(capacity, Default::default());
+        let outer = std::mem::replace(&mut self.unique, fresh);
+        body(self);
+        self.unique = outer;
+    }
+
+    pub fn reset(
+        &mut self,
+        module: &crate::Module,
+        reserved_keywords: &[&'static str],
+        extra_reserved_keywords: &[&'static str],
+        reserved_keywords_case_insensitive: &[&'static str],
+        reserved_prefixes: &[&'static str],
+        output: &mut FastHashMap<NameKey, String>,
+    ) {
+        self.reserved_prefixes.clear();
+        self.reserved_prefixes.extend(reserved_prefixes.iter());
+
+        self.unique.clear();
+        self.keywords.clear();
+        self.keywords.extend(reserved_keywords.iter());
+        self.keywords.extend(extra_reserved_keywords.iter());
+
+        debug_assert!(reserved_keywords_case_insensitive
+            .iter()
+            .all(|s| s.is_ascii()));
+        self.keywords_case_insensitive.clear();
+        self.keywords_case_insensitive.extend(
+            reserved_keywords_case_insensitive
+                .iter()
+                .map(|string| AsciiUniCase(*string)),
+        );
+
+        let mut temp = String::new();
+
+        for (ty_handle, ty) in module.types.iter() {
+            let ty_name = self.call_or(&ty.name, "type");
+            output.insert(NameKey::Type(ty_handle), ty_name);
+
+            if let crate::TypeInner::Struct { ref members, .. } = ty.inner {
+                self.namespace(members.len(), |namer| {
+                    for (index, member) in members.iter().enumerate() {
+                        let name = namer.call_or(&member.name, "member");
+                        output.insert(NameKey::StructMember(ty_handle, index as u32), name);
+                    }
+                })
+            }
+        }
+
+        for (ep_index, ep) in module.entry_points.iter().enumerate() {
+            let ep_name = self.call(&ep.name);
+            output.insert(NameKey::EntryPoint(ep_index as _), ep_name);
+            for (index, arg) in ep.function.arguments.iter().enumerate() {
+                let name = self.call_or(&arg.name, "param");
+                output.insert(
+                    NameKey::EntryPointArgument(ep_index as _, index as u32),
+                    name,
+                );
+            }
+            for (handle, var) in ep.function.local_variables.iter() {
+                let name = self.call_or(&var.name, "local");
+                output.insert(NameKey::EntryPointLocal(ep_index as _, handle), name);
+            }
+        }
+
+        for (fun_handle, fun) in module.functions.iter() {
+            let fun_name = self.call_or(&fun.name, "function");
+            output.insert(NameKey::Function(fun_handle), fun_name);
+            for (index, arg) in fun.arguments.iter().enumerate() {
+                let name = self.call_or(&arg.name, "param");
+                output.insert(NameKey::FunctionArgument(fun_handle, index as u32), name);
+            }
+            for (handle, var) in fun.local_variables.iter() {
+                let name = self.call_or(&var.name, "local");
+                output.insert(NameKey::FunctionLocal(fun_handle, handle), name);
+            }
+        }
+
+        for (handle, var) in module.global_variables.iter() {
+            let name = self.call_or(&var.name, "global");
+            output.insert(NameKey::GlobalVariable(handle), name);
+        }
+
+        for (handle, constant) in module.constants.iter() {
+            let label = match constant.name {
+                Some(ref name) => name,
+                None => {
+                    use std::fmt::Write;
+                    temp.clear();
+                    write!(temp, "const_{}", output[&NameKey::Type(constant.ty)]).unwrap();
+                    &temp
+                }
+            };
+            let name = self.call(label);
+            output.insert(NameKey::Constant(handle), name);
+        }
+    }
+}
+
+struct AsciiUniCase<S: AsRef<str> + ?Sized>(S);
+
+impl<S: AsRef<str>> PartialEq<Self> for AsciiUniCase<S> {
+    #[inline]
+    fn eq(&self, other: &Self) -> bool {
+        self.0.as_ref().eq_ignore_ascii_case(other.0.as_ref())
+    }
+}
+
+impl<S: AsRef<str>> Eq for AsciiUniCase<S> {}
+
+impl<S: AsRef<str>> Hash for AsciiUniCase<S> {
+    #[inline]
+    fn hash<H: Hasher>(&self, hasher: &mut H) {
+        for byte in self
+            .0
+            .as_ref()
+            .as_bytes()
+            .iter()
+            .map(|b| b.to_ascii_lowercase())
+        {
+            hasher.write_u8(byte);
+        }
+    }
+}
+
+

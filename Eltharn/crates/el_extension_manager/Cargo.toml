@@ -1,0 +1,27 @@
+[package]
+name = "el_extension_manager"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+description = "Shared Desktop/Web extension import, profiles and immutable launch preparation"
+
+[dependencies]
+el_extension_api = { path = "../el_extension_api" }
+el_mod_runtime = { path = "../el_mod_runtime" }
+el_launcher_core = { path = "../el_launcher_core" }
+el_platform_api = { path = "../el_platform_api" }
+el_shaderpack = { path = "../el_shaderpack", default-features = false }
+el_strict_json = { path = "../el_strict_json" }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+semver = "1"
+sha2 = "0.11"
+base64 = "0.22"
+zip = { version = "2.4.2", default-features = false, features = ["deflate"] }
+wasmparser = "=0.244.0"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tempfile = "3"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+rustix = { version = "=1.1.4", features = ["fs"] }

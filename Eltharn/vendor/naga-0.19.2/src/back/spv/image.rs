@@ -1,0 +1,1013 @@
+
+use super::{
+    selection::{MergeTuple, Selection},
+    Block, BlockContext, Error, IdGenerator, Instruction, LocalType, LookupType,
+};
+use crate::arena::Handle;
+use spirv::Word;
+
+struct ImageCoordinates {
+    value_id: Word,
+
+    type_id: Word,
+
+    size: Option<crate::VectorSize>,
+}
+
+trait Access {
+    type Output: MergeTuple + Copy + Clone;
+
+    fn generate(
+        &self,
+        id_gen: &mut IdGenerator,
+        coordinates_id: Word,
+        level_id: Option<Word>,
+        sample_id: Option<Word>,
+        block: &mut Block,
+    ) -> Self::Output;
+
+    fn result_type(&self) -> Self::Output;
+
+    fn out_of_bounds_value(&self, ctx: &mut BlockContext<'_>) -> Self::Output;
+}
+
+struct Load {
+    opcode: spirv::Op,
+
+    type_id: Word,
+
+    image_id: Word,
+}
+
+impl Load {
+    fn from_image_expr(
+        ctx: &mut BlockContext<'_>,
+        image_id: Word,
+        image_class: crate::ImageClass,
+        result_type_id: Word,
+    ) -> Result<Load, Error> {
+        let opcode = match image_class {
+            crate::ImageClass::Storage { .. } => spirv::Op::ImageRead,
+            crate::ImageClass::Depth { .. } | crate::ImageClass::Sampled { .. } => {
+                spirv::Op::ImageFetch
+            }
+        };
+
+        let type_id = match image_class {
+            crate::ImageClass::Depth { .. } => {
+                ctx.get_type_id(LookupType::Local(LocalType::Value {
+                    vector_size: Some(crate::VectorSize::Quad),
+                    scalar: crate::Scalar::F32,
+                    pointer_space: None,
+                }))
+            }
+            _ => result_type_id,
+        };
+
+        Ok(Load {
+            opcode,
+            type_id,
+            image_id,
+        })
+    }
+}
+
+impl Access for Load {
+    type Output = Word;
+
+    fn generate(
+        &self,
+        id_gen: &mut IdGenerator,
+        coordinates_id: Word,
+        level_id: Option<Word>,
+        sample_id: Option<Word>,
+        block: &mut Block,
+    ) -> Word {
+        let texel_id = id_gen.next();
+        let mut instruction = Instruction::image_fetch_or_read(
+            self.opcode,
+            self.type_id,
+            texel_id,
+            self.image_id,
+            coordinates_id,
+        );
+
+        match (level_id, sample_id) {
+            (None, None) => {}
+            (Some(level_id), None) => {
+                instruction.add_operand(spirv::ImageOperands::LOD.bits());
+                instruction.add_operand(level_id);
+            }
+            (None, Some(sample_id)) => {
+                instruction.add_operand(spirv::ImageOperands::SAMPLE.bits());
+                instruction.add_operand(sample_id);
+            }
+            (Some(_), Some(_)) => unreachable!(),
+        }
+
+        block.body.push(instruction);
+
+        texel_id
+    }
+
+    fn result_type(&self) -> Word {
+        self.type_id
+    }
+
+    fn out_of_bounds_value(&self, ctx: &mut BlockContext<'_>) -> Word {
+        ctx.writer.get_constant_null(self.type_id)
+    }
+}
+
+struct Store {
+    image_id: Word,
+
+    value_id: Word,
+}
+
+impl Access for Store {
+    type Output = ();
+
+    fn generate(
+        &self,
+        _id_gen: &mut IdGenerator,
+        coordinates_id: Word,
+        _level_id: Option<Word>,
+        _sample_id: Option<Word>,
+        block: &mut Block,
+    ) {
+        block.body.push(Instruction::image_write(
+            self.image_id,
+            coordinates_id,
+            self.value_id,
+        ));
+    }
+
+    fn result_type(&self) {}
+
+    fn out_of_bounds_value(&self, _ctx: &mut BlockContext<'_>) {}
+}
+
+impl<'w> BlockContext<'w> {
+    fn write_image_coordinates(
+        &mut self,
+        coordinates: Handle<crate::Expression>,
+        array_index: Option<Handle<crate::Expression>>,
+        block: &mut Block,
+    ) -> Result<ImageCoordinates, Error> {
+        use crate::TypeInner as Ti;
+        use crate::VectorSize as Vs;
+
+        let coordinates_id = self.cached[coordinates];
+        let ty = &self.fun_info[coordinates].ty;
+        let inner_ty = ty.inner_with(&self.ir_module.types);
+
+        let array_index = match array_index {
+            None => {
+                let value_id = coordinates_id;
+                let type_id = self.get_expression_type_id(ty);
+                let size = match *inner_ty {
+                    Ti::Scalar { .. } => None,
+                    Ti::Vector { size, .. } => Some(size),
+                    _ => return Err(Error::Validation("coordinate type")),
+                };
+                return Ok(ImageCoordinates {
+                    value_id,
+                    type_id,
+                    size,
+                });
+            }
+            Some(ix) => ix,
+        };
+
+        let (component_scalar, size) = match *inner_ty {
+            Ti::Scalar(scalar @ crate::Scalar { width: 4, .. }) => (scalar, Some(Vs::Bi)),
+            Ti::Vector {
+                scalar: scalar @ crate::Scalar { width: 4, .. },
+                size: Vs::Bi,
+            } => (scalar, Some(Vs::Tri)),
+            Ti::Vector {
+                scalar: scalar @ crate::Scalar { width: 4, .. },
+                size: Vs::Tri,
+            } => (scalar, Some(Vs::Quad)),
+            Ti::Vector { size: Vs::Quad, .. } => {
+                return Err(Error::Validation("extending vec4 coordinate"));
+            }
+            ref other => {
+                log::error!("wrong coordinate type {:?}", other);
+                return Err(Error::Validation("coordinate type"));
+            }
+        };
+
+        let array_index_id = self.cached[array_index];
+        let ty = &self.fun_info[array_index].ty;
+        let inner_ty = ty.inner_with(&self.ir_module.types);
+        let array_index_scalar = match *inner_ty {
+            Ti::Scalar(
+                scalar @ crate::Scalar {
+                    kind: crate::ScalarKind::Sint | crate::ScalarKind::Uint,
+                    width: 4,
+                },
+            ) => scalar,
+            _ => unreachable!("we only allow i32 and u32"),
+        };
+        let cast = match (component_scalar.kind, array_index_scalar.kind) {
+            (crate::ScalarKind::Sint, crate::ScalarKind::Sint)
+            | (crate::ScalarKind::Uint, crate::ScalarKind::Uint) => None,
+            (crate::ScalarKind::Sint, crate::ScalarKind::Uint)
+            | (crate::ScalarKind::Uint, crate::ScalarKind::Sint) => Some(spirv::Op::Bitcast),
+            (crate::ScalarKind::Float, crate::ScalarKind::Sint) => Some(spirv::Op::ConvertSToF),
+            (crate::ScalarKind::Float, crate::ScalarKind::Uint) => Some(spirv::Op::ConvertUToF),
+            (crate::ScalarKind::Bool, _) => unreachable!("we don't allow bool for component"),
+            (_, crate::ScalarKind::Bool | crate::ScalarKind::Float) => {
+                unreachable!("we don't allow bool or float for array index")
+            }
+            (crate::ScalarKind::AbstractInt | crate::ScalarKind::AbstractFloat, _)
+            | (_, crate::ScalarKind::AbstractInt | crate::ScalarKind::AbstractFloat) => {
+                unreachable!("abstract types should never reach backends")
+            }
+        };
+        let reconciled_array_index_id = if let Some(cast) = cast {
+            let component_ty_id = self.get_type_id(LookupType::Local(LocalType::Value {
+                vector_size: None,
+                scalar: component_scalar,
+                pointer_space: None,
+            }));
+            let reconciled_id = self.gen_id();
+            block.body.push(Instruction::unary(
+                cast,
+                component_ty_id,
+                reconciled_id,
+                array_index_id,
+            ));
+            reconciled_id
+        } else {
+            array_index_id
+        };
+
+        let type_id = self.get_type_id(LookupType::Local(LocalType::Value {
+            vector_size: size,
+            scalar: component_scalar,
+            pointer_space: None,
+        }));
+
+        let value_id = self.gen_id();
+        block.body.push(Instruction::composite_construct(
+            type_id,
+            value_id,
+            &[coordinates_id, reconciled_array_index_id],
+        ));
+        Ok(ImageCoordinates {
+            value_id,
+            type_id,
+            size,
+        })
+    }
+
+    pub(super) fn get_handle_id(&mut self, expr_handle: Handle<crate::Expression>) -> Word {
+        let id = match self.ir_function.expressions[expr_handle] {
+            crate::Expression::GlobalVariable(handle) => {
+                self.writer.global_variables[handle.index()].handle_id
+            }
+            crate::Expression::FunctionArgument(i) => {
+                self.function.parameters[i as usize].handle_id
+            }
+            crate::Expression::Access { .. } | crate::Expression::AccessIndex { .. } => {
+                self.cached[expr_handle]
+            }
+            ref other => unreachable!("Unexpected image expression {:?}", other),
+        };
+
+        if id == 0 {
+            unreachable!(
+                "Image expression {:?} doesn't have a handle ID",
+                expr_handle
+            );
+        }
+
+        id
+    }
+
+    fn write_coordinate_one(&mut self, coordinates: &ImageCoordinates) -> Result<Word, Error> {
+        let one = self.get_scope_constant(1);
+        match coordinates.size {
+            None => Ok(one),
+            Some(vector_size) => {
+                let ones = [one; 4];
+                let id = self.gen_id();
+                Instruction::constant_composite(
+                    coordinates.type_id,
+                    id,
+                    &ones[..vector_size as usize],
+                )
+                .to_words(&mut self.writer.logical_layout.declarations);
+                Ok(id)
+            }
+        }
+    }
+
+    fn restrict_scalar(
+        &mut self,
+        type_id: Word,
+        input_id: Word,
+        size_id: Word,
+        block: &mut Block,
+    ) -> Result<Word, Error> {
+        let i32_one_id = self.get_scope_constant(1);
+
+        let limit_id = self.gen_id();
+        block.body.push(Instruction::binary(
+            spirv::Op::ISub,
+            type_id,
+            limit_id,
+            size_id,
+            i32_one_id,
+        ));
+
+        let restricted_id = self.gen_id();
+        block.body.push(Instruction::ext_inst(
+            self.writer.gl450_ext_inst_id,
+            spirv::GLOp::UMin,
+            type_id,
+            restricted_id,
+            &[input_id, limit_id],
+        ));
+
+        Ok(restricted_id)
+    }
+
+    fn write_coordinate_bounds(
+        &mut self,
+        type_id: Word,
+        image_id: Word,
+        level_id: Option<Word>,
+        block: &mut Block,
+    ) -> Word {
+        let coordinate_bounds_id = self.gen_id();
+        match level_id {
+            Some(level_id) => {
+                let mut inst = Instruction::image_query(
+                    spirv::Op::ImageQuerySizeLod,
+                    type_id,
+                    coordinate_bounds_id,
+                    image_id,
+                );
+                inst.add_operand(level_id);
+                block.body.push(inst);
+            }
+            _ => {
+                block.body.push(Instruction::image_query(
+                    spirv::Op::ImageQuerySize,
+                    type_id,
+                    coordinate_bounds_id,
+                    image_id,
+                ));
+            }
+        }
+
+        coordinate_bounds_id
+    }
+
+    fn write_restricted_coordinates(
+        &mut self,
+        image_id: Word,
+        coordinates: ImageCoordinates,
+        level_id: Option<Word>,
+        sample_id: Option<Word>,
+        block: &mut Block,
+    ) -> Result<(Word, Option<Word>, Option<Word>), Error> {
+        self.writer.require_any(
+            "the `Restrict` image bounds check policy",
+            &[spirv::Capability::ImageQuery],
+        )?;
+
+        let i32_type_id = self.get_type_id(LookupType::Local(LocalType::Value {
+            vector_size: None,
+            scalar: crate::Scalar::I32,
+            pointer_space: None,
+        }));
+
+        let level_id = level_id
+            .map(|level_id| {
+                let num_levels_id = self.gen_id();
+                block.body.push(Instruction::image_query(
+                    spirv::Op::ImageQueryLevels,
+                    i32_type_id,
+                    num_levels_id,
+                    image_id,
+                ));
+
+                self.restrict_scalar(i32_type_id, level_id, num_levels_id, block)
+            })
+            .transpose()?;
+
+        let sample_id = sample_id
+            .map(|sample_id| {
+                let num_samples_id = self.gen_id();
+                block.body.push(Instruction::image_query(
+                    spirv::Op::ImageQuerySamples,
+                    i32_type_id,
+                    num_samples_id,
+                    image_id,
+                ));
+
+                self.restrict_scalar(i32_type_id, sample_id, num_samples_id, block)
+            })
+            .transpose()?;
+
+        let coordinate_bounds_id =
+            self.write_coordinate_bounds(coordinates.type_id, image_id, level_id, block);
+
+        let ones = self.write_coordinate_one(&coordinates)?;
+        let coordinate_limit_id = self.gen_id();
+        block.body.push(Instruction::binary(
+            spirv::Op::ISub,
+            coordinates.type_id,
+            coordinate_limit_id,
+            coordinate_bounds_id,
+            ones,
+        ));
+
+        let restricted_coordinates_id = self.gen_id();
+        block.body.push(Instruction::ext_inst(
+            self.writer.gl450_ext_inst_id,
+            spirv::GLOp::UMin,
+            coordinates.type_id,
+            restricted_coordinates_id,
+            &[coordinates.value_id, coordinate_limit_id],
+        ));
+
+        Ok((restricted_coordinates_id, level_id, sample_id))
+    }
+
+    fn write_conditional_image_access<A: Access>(
+        &mut self,
+        image_id: Word,
+        coordinates: ImageCoordinates,
+        level_id: Option<Word>,
+        sample_id: Option<Word>,
+        block: &mut Block,
+        access: &A,
+    ) -> Result<A::Output, Error> {
+        self.writer.require_any(
+            "the `ReadZeroSkipWrite` image bounds check policy",
+            &[spirv::Capability::ImageQuery],
+        )?;
+
+        let bool_type_id = self.writer.get_bool_type_id();
+        let i32_type_id = self.get_type_id(LookupType::Local(LocalType::Value {
+            vector_size: None,
+            scalar: crate::Scalar::I32,
+            pointer_space: None,
+        }));
+
+        let null_id = access.out_of_bounds_value(self);
+
+        let mut selection = Selection::start(block, access.result_type());
+
+        if let Some(level_id) = level_id {
+            let num_levels_id = self.gen_id();
+            selection.block().body.push(Instruction::image_query(
+                spirv::Op::ImageQueryLevels,
+                i32_type_id,
+                num_levels_id,
+                image_id,
+            ));
+
+            let lod_cond_id = self.gen_id();
+            selection.block().body.push(Instruction::binary(
+                spirv::Op::ULessThan,
+                bool_type_id,
+                lod_cond_id,
+                level_id,
+                num_levels_id,
+            ));
+
+            selection.if_true(self, lod_cond_id, null_id);
+        }
+
+        if let Some(sample_id) = sample_id {
+            let num_samples_id = self.gen_id();
+            selection.block().body.push(Instruction::image_query(
+                spirv::Op::ImageQuerySamples,
+                i32_type_id,
+                num_samples_id,
+                image_id,
+            ));
+
+            let samples_cond_id = self.gen_id();
+            selection.block().body.push(Instruction::binary(
+                spirv::Op::ULessThan,
+                bool_type_id,
+                samples_cond_id,
+                sample_id,
+                num_samples_id,
+            ));
+
+            selection.if_true(self, samples_cond_id, null_id);
+        }
+
+        let coordinate_bounds_id = self.write_coordinate_bounds(
+            coordinates.type_id,
+            image_id,
+            level_id,
+            selection.block(),
+        );
+
+        let coords_bool_type_id = self.get_type_id(LookupType::Local(LocalType::Value {
+            vector_size: coordinates.size,
+            scalar: crate::Scalar::BOOL,
+            pointer_space: None,
+        }));
+        let coords_conds_id = self.gen_id();
+        selection.block().body.push(Instruction::binary(
+            spirv::Op::ULessThan,
+            coords_bool_type_id,
+            coords_conds_id,
+            coordinates.value_id,
+            coordinate_bounds_id,
+        ));
+
+        let coords_cond_id = if coords_bool_type_id != bool_type_id {
+            let id = self.gen_id();
+            selection.block().body.push(Instruction::relational(
+                spirv::Op::All,
+                bool_type_id,
+                id,
+                coords_conds_id,
+            ));
+            id
+        } else {
+            coords_conds_id
+        };
+
+        selection.if_true(self, coords_cond_id, null_id);
+
+        let texel_id = access.generate(
+            &mut self.writer.id_gen,
+            coordinates.value_id,
+            level_id,
+            sample_id,
+            selection.block(),
+        );
+
+        Ok(selection.finish(self, texel_id))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn write_image_load(
+        &mut self,
+        result_type_id: Word,
+        image: Handle<crate::Expression>,
+        coordinate: Handle<crate::Expression>,
+        array_index: Option<Handle<crate::Expression>>,
+        level: Option<Handle<crate::Expression>>,
+        sample: Option<Handle<crate::Expression>>,
+        block: &mut Block,
+    ) -> Result<Word, Error> {
+        let image_id = self.get_handle_id(image);
+        let image_type = self.fun_info[image].ty.inner_with(&self.ir_module.types);
+        let image_class = match *image_type {
+            crate::TypeInner::Image { class, .. } => class,
+            _ => return Err(Error::Validation("image type")),
+        };
+
+        let access = Load::from_image_expr(self, image_id, image_class, result_type_id)?;
+        let coordinates = self.write_image_coordinates(coordinate, array_index, block)?;
+
+        let level_id = level.map(|expr| self.cached[expr]);
+        let sample_id = sample.map(|expr| self.cached[expr]);
+
+        let access_id = match self.writer.bounds_check_policies.image_load {
+            crate::proc::BoundsCheckPolicy::Restrict => {
+                let (coords, level_id, sample_id) = self.write_restricted_coordinates(
+                    image_id,
+                    coordinates,
+                    level_id,
+                    sample_id,
+                    block,
+                )?;
+                access.generate(&mut self.writer.id_gen, coords, level_id, sample_id, block)
+            }
+            crate::proc::BoundsCheckPolicy::ReadZeroSkipWrite => self
+                .write_conditional_image_access(
+                    image_id,
+                    coordinates,
+                    level_id,
+                    sample_id,
+                    block,
+                    &access,
+                )?,
+            crate::proc::BoundsCheckPolicy::Unchecked => access.generate(
+                &mut self.writer.id_gen,
+                coordinates.value_id,
+                level_id,
+                sample_id,
+                block,
+            ),
+        };
+
+        let result_id = if result_type_id == access.result_type() {
+            access_id
+        } else {
+            let component_id = self.gen_id();
+            block.body.push(Instruction::composite_extract(
+                result_type_id,
+                component_id,
+                access_id,
+                &[0],
+            ));
+            component_id
+        };
+
+        Ok(result_id)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn write_image_sample(
+        &mut self,
+        result_type_id: Word,
+        image: Handle<crate::Expression>,
+        sampler: Handle<crate::Expression>,
+        gather: Option<crate::SwizzleComponent>,
+        coordinate: Handle<crate::Expression>,
+        array_index: Option<Handle<crate::Expression>>,
+        offset: Option<Handle<crate::Expression>>,
+        level: crate::SampleLevel,
+        depth_ref: Option<Handle<crate::Expression>>,
+        block: &mut Block,
+    ) -> Result<Word, Error> {
+        use super::instructions::SampleLod;
+        let image_id = self.get_handle_id(image);
+        let image_type = self.fun_info[image].ty.handle().unwrap();
+        let needs_sub_access = match self.ir_module.types[image_type].inner {
+            crate::TypeInner::Image {
+                class: crate::ImageClass::Depth { .. },
+                ..
+            } => depth_ref.is_none() && gather.is_none(),
+            _ => false,
+        };
+        let sample_result_type_id = if needs_sub_access {
+            self.get_type_id(LookupType::Local(LocalType::Value {
+                vector_size: Some(crate::VectorSize::Quad),
+                scalar: crate::Scalar::F32,
+                pointer_space: None,
+            }))
+        } else {
+            result_type_id
+        };
+
+        let image_type_id = self.get_type_id(LookupType::Handle(image_type));
+        let sampled_image_type_id =
+            self.get_type_id(LookupType::Local(LocalType::SampledImage { image_type_id }));
+
+        let sampler_id = self.get_handle_id(sampler);
+        let coordinates_id = self
+            .write_image_coordinates(coordinate, array_index, block)?
+            .value_id;
+
+        let sampled_image_id = self.gen_id();
+        block.body.push(Instruction::sampled_image(
+            sampled_image_type_id,
+            sampled_image_id,
+            image_id,
+            sampler_id,
+        ));
+        let id = self.gen_id();
+
+        let depth_id = depth_ref.map(|handle| self.cached[handle]);
+        let mut mask = spirv::ImageOperands::empty();
+        mask.set(spirv::ImageOperands::CONST_OFFSET, offset.is_some());
+
+        let mut main_instruction = match (level, gather) {
+            (_, Some(component)) => {
+                let component_id = self.get_index_constant(component as u32);
+                let mut inst = Instruction::image_gather(
+                    sample_result_type_id,
+                    id,
+                    sampled_image_id,
+                    coordinates_id,
+                    component_id,
+                    depth_id,
+                );
+                if !mask.is_empty() {
+                    inst.add_operand(mask.bits());
+                }
+                inst
+            }
+            (crate::SampleLevel::Zero, None) => {
+                let mut inst = Instruction::image_sample(
+                    sample_result_type_id,
+                    id,
+                    SampleLod::Explicit,
+                    sampled_image_id,
+                    coordinates_id,
+                    depth_id,
+                );
+
+                let zero_id = self.writer.get_constant_scalar(crate::Literal::F32(0.0));
+
+                mask |= spirv::ImageOperands::LOD;
+                inst.add_operand(mask.bits());
+                inst.add_operand(zero_id);
+
+                inst
+            }
+            (crate::SampleLevel::Auto, None) => {
+                let mut inst = Instruction::image_sample(
+                    sample_result_type_id,
+                    id,
+                    SampleLod::Implicit,
+                    sampled_image_id,
+                    coordinates_id,
+                    depth_id,
+                );
+                if !mask.is_empty() {
+                    inst.add_operand(mask.bits());
+                }
+                inst
+            }
+            (crate::SampleLevel::Exact(lod_handle), None) => {
+                let mut inst = Instruction::image_sample(
+                    sample_result_type_id,
+                    id,
+                    SampleLod::Explicit,
+                    sampled_image_id,
+                    coordinates_id,
+                    depth_id,
+                );
+
+                let lod_id = self.cached[lod_handle];
+                mask |= spirv::ImageOperands::LOD;
+                inst.add_operand(mask.bits());
+                inst.add_operand(lod_id);
+
+                inst
+            }
+            (crate::SampleLevel::Bias(bias_handle), None) => {
+                let mut inst = Instruction::image_sample(
+                    sample_result_type_id,
+                    id,
+                    SampleLod::Implicit,
+                    sampled_image_id,
+                    coordinates_id,
+                    depth_id,
+                );
+
+                let bias_id = self.cached[bias_handle];
+                mask |= spirv::ImageOperands::BIAS;
+                inst.add_operand(mask.bits());
+                inst.add_operand(bias_id);
+
+                inst
+            }
+            (crate::SampleLevel::Gradient { x, y }, None) => {
+                let mut inst = Instruction::image_sample(
+                    sample_result_type_id,
+                    id,
+                    SampleLod::Explicit,
+                    sampled_image_id,
+                    coordinates_id,
+                    depth_id,
+                );
+
+                let x_id = self.cached[x];
+                let y_id = self.cached[y];
+                mask |= spirv::ImageOperands::GRAD;
+                inst.add_operand(mask.bits());
+                inst.add_operand(x_id);
+                inst.add_operand(y_id);
+
+                inst
+            }
+        };
+
+        if let Some(offset_const) = offset {
+            let offset_id = self.writer.constant_ids[offset_const.index()];
+            main_instruction.add_operand(offset_id);
+        }
+
+        block.body.push(main_instruction);
+
+        let id = if needs_sub_access {
+            let sub_id = self.gen_id();
+            block.body.push(Instruction::composite_extract(
+                result_type_id,
+                sub_id,
+                id,
+                &[0],
+            ));
+            sub_id
+        } else {
+            id
+        };
+
+        Ok(id)
+    }
+
+    pub(super) fn write_image_query(
+        &mut self,
+        result_type_id: Word,
+        image: Handle<crate::Expression>,
+        query: crate::ImageQuery,
+        block: &mut Block,
+    ) -> Result<Word, Error> {
+        use crate::{ImageClass as Ic, ImageDimension as Id, ImageQuery as Iq};
+
+        let image_id = self.get_handle_id(image);
+        let image_type = self.fun_info[image].ty.handle().unwrap();
+        let (dim, arrayed, class) = match self.ir_module.types[image_type].inner {
+            crate::TypeInner::Image {
+                dim,
+                arrayed,
+                class,
+            } => (dim, arrayed, class),
+            _ => {
+                return Err(Error::Validation("image type"));
+            }
+        };
+
+        self.writer
+            .require_any("image queries", &[spirv::Capability::ImageQuery])?;
+
+        let id = match query {
+            Iq::Size { level } => {
+                let dim_coords = match dim {
+                    Id::D1 => 1,
+                    Id::D2 | Id::Cube => 2,
+                    Id::D3 => 3,
+                };
+                let array_coords = usize::from(arrayed);
+                let vector_size = match dim_coords + array_coords {
+                    2 => Some(crate::VectorSize::Bi),
+                    3 => Some(crate::VectorSize::Tri),
+                    4 => Some(crate::VectorSize::Quad),
+                    _ => None,
+                };
+                let extended_size_type_id = self.get_type_id(LookupType::Local(LocalType::Value {
+                    vector_size,
+                    scalar: crate::Scalar::U32,
+                    pointer_space: None,
+                }));
+
+                let (query_op, level_id) = match class {
+                    Ic::Sampled { multi: true, .. }
+                    | Ic::Depth { multi: true }
+                    | Ic::Storage { .. } => (spirv::Op::ImageQuerySize, None),
+                    _ => {
+                        let level_id = match level {
+                            Some(expr) => self.cached[expr],
+                            None => self.get_index_constant(0),
+                        };
+                        (spirv::Op::ImageQuerySizeLod, Some(level_id))
+                    }
+                };
+
+                let id_extended = self.gen_id();
+                let mut inst = Instruction::image_query(
+                    query_op,
+                    extended_size_type_id,
+                    id_extended,
+                    image_id,
+                );
+                if let Some(expr_id) = level_id {
+                    inst.add_operand(expr_id);
+                }
+                block.body.push(inst);
+
+                if result_type_id != extended_size_type_id {
+                    let id = self.gen_id();
+                    let components = match dim {
+                        Id::Cube => &[0u32, 0][..],
+                        _ => &[0u32, 1, 2, 3][..dim_coords],
+                    };
+                    block.body.push(Instruction::vector_shuffle(
+                        result_type_id,
+                        id,
+                        id_extended,
+                        id_extended,
+                        components,
+                    ));
+
+                    id
+                } else {
+                    id_extended
+                }
+            }
+            Iq::NumLevels => {
+                let query_id = self.gen_id();
+                block.body.push(Instruction::image_query(
+                    spirv::Op::ImageQueryLevels,
+                    result_type_id,
+                    query_id,
+                    image_id,
+                ));
+
+                query_id
+            }
+            Iq::NumLayers => {
+                let vec_size = match dim {
+                    Id::D1 => crate::VectorSize::Bi,
+                    Id::D2 | Id::Cube => crate::VectorSize::Tri,
+                    Id::D3 => crate::VectorSize::Quad,
+                };
+                let extended_size_type_id = self.get_type_id(LookupType::Local(LocalType::Value {
+                    vector_size: Some(vec_size),
+                    scalar: crate::Scalar::U32,
+                    pointer_space: None,
+                }));
+                let id_extended = self.gen_id();
+                let mut inst = Instruction::image_query(
+                    spirv::Op::ImageQuerySizeLod,
+                    extended_size_type_id,
+                    id_extended,
+                    image_id,
+                );
+                inst.add_operand(self.get_index_constant(0));
+                block.body.push(inst);
+
+                let extract_id = self.gen_id();
+                block.body.push(Instruction::composite_extract(
+                    result_type_id,
+                    extract_id,
+                    id_extended,
+                    &[vec_size as u32 - 1],
+                ));
+
+                extract_id
+            }
+            Iq::NumSamples => {
+                let query_id = self.gen_id();
+                block.body.push(Instruction::image_query(
+                    spirv::Op::ImageQuerySamples,
+                    result_type_id,
+                    query_id,
+                    image_id,
+                ));
+
+                query_id
+            }
+        };
+
+        Ok(id)
+    }
+
+    pub(super) fn write_image_store(
+        &mut self,
+        image: Handle<crate::Expression>,
+        coordinate: Handle<crate::Expression>,
+        array_index: Option<Handle<crate::Expression>>,
+        value: Handle<crate::Expression>,
+        block: &mut Block,
+    ) -> Result<(), Error> {
+        let image_id = self.get_handle_id(image);
+        let coordinates = self.write_image_coordinates(coordinate, array_index, block)?;
+        let value_id = self.cached[value];
+
+        let write = Store { image_id, value_id };
+
+        match *self.fun_info[image].ty.inner_with(&self.ir_module.types) {
+            crate::TypeInner::Image {
+                class:
+                    crate::ImageClass::Storage {
+                        format: crate::StorageFormat::Bgra8Unorm,
+                        ..
+                    },
+                ..
+            } => self.writer.require_any(
+                "Bgra8Unorm storage write",
+                &[spirv::Capability::StorageImageWriteWithoutFormat],
+            )?,
+            _ => {}
+        }
+
+        match self.writer.bounds_check_policies.image_store {
+            crate::proc::BoundsCheckPolicy::Restrict => {
+                let (coords, _, _) =
+                    self.write_restricted_coordinates(image_id, coordinates, None, None, block)?;
+                write.generate(&mut self.writer.id_gen, coords, None, None, block);
+            }
+            crate::proc::BoundsCheckPolicy::ReadZeroSkipWrite => {
+                self.write_conditional_image_access(
+                    image_id,
+                    coordinates,
+                    None,
+                    None,
+                    block,
+                    &write,
+                )?;
+            }
+            crate::proc::BoundsCheckPolicy::Unchecked => {
+                write.generate(
+                    &mut self.writer.id_gen,
+                    coordinates.value_id,
+                    None,
+                    None,
+                    block,
+                );
+            }
+        }
+
+        Ok(())
+    }
+}

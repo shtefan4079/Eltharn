@@ -1,0 +1,28 @@
+Android build
+
+Use JDK 17, the checked-in Gradle wrapper, cargo-ndk, the pinned Rust toolchain
+and its aarch64-linux-android standard library. The current shell pins Gradle
+8.2.1, Android Gradle Plugin 8.2.0 and GameActivity 2.0.2.
+
+Copy android/local.properties.example to the ignored android/local.properties
+and set sdk.dir and ndk.dir to your installed Android SDK/NDK. The previously
+verified toolchain used SDK 34 and NDK 27.3.13750724.
+
+    cd Eltharn/apps/el_android/android
+    ./gradlew --no-daemon :app:assembleDebug
+
+The APK currently supports arm64-v8a. Gradle builds release-optimized Rust
+libraries with extensions and shaderpacks and packages the 1.21.11 IPC backend.
+Minecraft assets are downloaded from official metadata and hash-verified on
+first launch; they are not embedded in the APK.
+
+assembleRelease produces an unsigned APK unless signing is configured. The
+ignored localDebugSigning option is for local checks, not public signing.
+Use -Peltharn.verificationPackage=true for a separate debug application ID.
+
+The launcher and game use separate Android processes. Surface suspension keeps
+game state and releases the rendering surface; resume recreates that surface.
+Touch geometry and settings use the shared Rust touch-control contract.
+
+An APK build does not establish complete mobile parity. Microsoft login, IME,
+audio, downloads, inventory gestures and hardware input need device checks.

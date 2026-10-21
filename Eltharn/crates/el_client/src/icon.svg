@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 128 128" role="img" aria-labelledby="title description">
+  <title id="title">Eltharn — Aperture</title>
+  <desc id="description">Two viewport corners frame a faceted center: camera, graphics and custom shaderpacks.</desc>
+  <path fill="#ede7d9" d="M24 60V24H60V40H40V60Z M104 68V104H68V88H88V68Z"/>
+  <path fill="#9bbba5" d="M64 40 88 64 64 88 40 64Z"/>
+  <path fill="#718f7e" d="M64 40V88L40 64Z"/>
+</svg>

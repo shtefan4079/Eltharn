@@ -1,0 +1,20 @@
+WebSocket gateway
+
+The browser cannot open Minecraft TCP connections. The gateway bridges each
+WebSocket connection to a fresh IPC backend process and stops that process
+when the browser disconnects. Deploy behind an HTTPS reverse proxy:
+
+    ELTHARN_GATE_BACKEND_1_21_11=/opt/eltharn/eltharn-protocol \
+    ELTHARN_GATE_GATEWAY_BIND=127.0.0.1:9001 \
+    ELTHARN_GATE_ALLOWED_ORIGIN=https://play.example \
+    ./eltharn_gate-gateway
+
+Serve the Web bundle from that origin and proxy /game to 127.0.0.1:9001.
+Set ELTHARN_GATE_SERVER=play.example:25565 to pin one upstream server.
+Without it, restrict the available destinations before exposing the gateway.
+
+ELTHARN_GATE_MAX_CONNECTIONS defaults to 64 and
+ELTHARN_GATE_MAX_MESSAGE_BYTES defaults to 1048576.
+ELTHARN_GATE_BACKEND_BUNDLES maps additional versions to backend executables;
+publish matching backend_manifests in the browser deployment configuration.
+The backend Hello must match the requested protocol, IPC and resource family.

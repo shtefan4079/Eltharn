@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <application
+        android:allowBackup="false"
+        android:icon="@drawable/eltharn_gate_icon"
+        android:label="${appLabel}"
+        android:theme="@style/Theme.EltharnGate">
+        <activity
+            android:name=".EltharnGateActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <activity
+            android:name=".EltharnGateGameActivity"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|density"
+            android:exported="false"
+            android:process=":game">
+            <meta-data
+                android:name="android.app.lib_name"
+                android:value="eltharn_android" />
+        </activity>
+    </application>
+</manifest>

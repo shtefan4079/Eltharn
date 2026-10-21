@@ -1,0 +1,19 @@
+MIT KEMAR diffuse-field equalized head-related impulse responses
+
+Bill Gardner and Keith Martin, MIT Media Laboratory, 1994.
+Source: https://sound.media.mit.edu/resources/KEMAR.html
+Archive: https://sound.media.mit.edu/resources/KEMAR/diffuse.zip
+Archive SHA-256: a48e73137390626ef1e45d1de6a4d98530c6aa570e71b40f7c4442241ed5fa22
+
+Original permission statement:
+This data is Copyright 1994 by the MIT Media Laboratory. It is provided free
+with no restrictions on use, provided the authors are cited when the data is
+used in any research or commercial application.
+
+Eltharn uses the complete 368 supplied 44.1 kHz, stereo 128-sample responses.
+The compact symmetric dataset covers azimuth 0..180 degrees (clockwise from
+front) and elevations -40..90 degrees. Opposite azimuths swap ears; elevations
+below -40 degrees use the lowest measured ring. Samples are unchanged signed
+16-bit PCM. The import recorded elevations/azimuths and repacked the WAV
+samples without altering their response or interaural time difference.
+This is Eltharn's binaural backend, not OpenAL's precise default HRTF dataset.

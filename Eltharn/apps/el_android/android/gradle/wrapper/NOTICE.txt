@@ -1,0 +1,35 @@
+Gradle Wrapper provenance
+=========================
+
+The adjacent gradle-wrapper.jar is unmodified Gradle Wrapper code. It matches
+the artifact in Gradle v9.5.0, commit
+3fe117d68f3907790f3809f121aa36303a9151f8, byte for byte:
+https://github.com/gradle/gradle/blob/3fe117d68f3907790f3809f121aa36303a9151f8/gradle/wrapper/gradle-wrapper.jar
+
+JAR SHA-256:
+497c8c2a7e5031f6aa847f88104aa80a93532ec32ee17bdb8d1d2f67a194a9c7
+This hash also appears in Gradle's official wrapper checksum reference:
+https://gradle.org/release-checksums/
+The same JAR appears in multiple Gradle releases. The matching reference does
+not establish the historical import revision. The configured distribution is
+separately pinned to Gradle 8.2.1 in gradle-wrapper.properties; a wrapper JAR
+and the Gradle distribution it downloads need not have the same version.
+
+License: Apache-2.0. The JAR's own META-INF/MANIFEST.MF declares this license.
+LICENSE.txt is an exact copy of the JAR's META-INF/LICENSE, SHA-256:
+0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594
+There is no separate NOTICE entry inside this JAR. This project note adds no
+license restrictions and does not assign the project license to Gradle code.
+
+The ../../gradlew and ../../gradlew.bat startup scripts also derive from
+Gradle. Their Apache-2.0 copyright/license headers remain intact. Relative to
+the inspected v9.5.0 scripts, explanatory comments and the default UTF-8 JVM
+property were removed. The scripts retain their wrapper launch behavior.
+Current script SHA-256 values:
+gradlew: 0e3c21d60b955e52ac5192e094905e29a31aecad55a05c75407c29364891790b
+gradlew.bat: ae4552ac785b0b127c96e953b224f8c21c048c840f4d583cc3046fa82ba51766
+Reference script SHA-256 values at the commit above:
+gradlew: 45bda8deaef01b732f07bd317f962a736e349c6faa6662829bc0f41293b51212
+gradlew.bat: 9e62ee9a1c6eb7cecc90e55acc3ff09a1631ccfe3edddf180538a1e42b1532dc
+
+The scripts and wrapper are build tools, not Android game assets.

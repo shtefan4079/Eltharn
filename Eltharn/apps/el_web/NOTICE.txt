@@ -1,0 +1,40 @@
+coi-serviceworker.js
+====================
+
+This locally modified cross-origin isolation worker follows the worker-side
+implementation of coi-serviceworker by Guido Zuidhof and contributors. Its
+install/activate handlers, fetch compatibility guard and response-header
+reconstruction are retained with modifications for Eltharn. It is attributed
+under the upstream MIT license rather than claimed as wholly original code.
+
+The local history does not identify the exact imported upstream revision.
+The following immutable upstream reference was checked for this notice:
+
+Project: https://github.com/gzuidhof/coi-serviceworker
+Revision: 7b1d2a092d0d2dd2b7270b6f12f13605de26f214
+Source: https://github.com/gzuidhof/coi-serviceworker/blob/7b1d2a092d0d2dd2b7270b6f12f13605de26f214/coi-serviceworker.js
+Source SHA-256: e97bbac6017322d48aa54a5bc7ce473c725a4b7376ff245002e0ba71c3dcdd7e
+License: https://github.com/gzuidhof/coi-serviceworker/blob/7b1d2a092d0d2dd2b7270b6f12f13605de26f214/LICENSE
+License SHA-256: 3ee2c88cec9f3036fd4b0cba94e94485bb8b4673be7b8e0f3b1496c5baff75cb
+
+MIT License
+
+Copyright (c) 2021 Guido Zuidhof
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

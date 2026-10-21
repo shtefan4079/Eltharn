@@ -1,0 +1,11 @@
+[package]
+name = "el_world"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+
+[dependencies]
+el_core = { package = "el_core", path = "../el_core" }
+el_math = { package = "el_math", path = "../el_math" }
+el_nbt = { package = "el_nbt", path = "../el_nbt" }
+uuid = { version = "1.8", features = ["v4", "serde"] }

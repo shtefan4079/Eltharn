@@ -1,0 +1,10 @@
+[package]
+name = "el_extension_api"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+description = "Neutral extension value types, checked ABI framing and capability policy; no executor or I/O"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+semver = "1.0"

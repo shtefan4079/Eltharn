@@ -1,0 +1,10 @@
+[package]
+name = "el_math"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+description = "Core mathematical structures, voxel math, and Java-compatible random algorithms"
+
+[dependencies]
+
+md5 = "0.7.0"

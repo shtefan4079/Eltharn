@@ -1,0 +1,13 @@
+[package]
+name = "eltharn"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+description = "Eltharn desktop launcher, game and versioned IPC backend"
+
+[dependencies]
+el_gate = { path = "../../../EltharnGate" }
+el_client = { path = "../../crates/el_client" }
+el_protocol_1_21_11 = { path = "../../crates/el_protocol_1_21_11" }
+el_launcher_core = { path = "../../crates/el_launcher_core" }
+serde_json = "1"

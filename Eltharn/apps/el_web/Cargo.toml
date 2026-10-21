@@ -1,0 +1,51 @@
+[package]
+name = "el_web"
+version = "0.1.0"
+edition = "2024"
+description = "WASM launcher lifecycle and browser WSS adapter for Eltharn"
+license.workspace = true
+
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[features]
+default = ["extensions"]
+extensions = ["el_client/extensions", "dep:el_extension_manager", "dep:base64"]
+shaderpacks = ["el_client/shaderpacks"]
+
+[dependencies]
+el_extension_manager = { path = "../../crates/el_extension_manager", optional = true }
+serde_json = { version = "1" }
+el_protocol_backend = { path = "../../crates/el_protocol_backend" }
+base64 = { version = "0.22", optional = true }
+el_app = { path = "../../crates/el_app" }
+el_launcher_core = { path = "../../crates/el_launcher_core" }
+el_platform_api = { path = "../../crates/el_platform_api" }
+el_transport = { path = "../../crates/el_transport" }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = "0.3.99"
+wasm-bindgen = "0.2.122"
+wasm-bindgen-futures = "0.4.52"
+web-sys = { version = "0.3.99", features = [
+    "BinaryType",
+    "CanvasRenderingContext2d",
+    "Document",
+    "Element",
+    "Event",
+    "EventTarget",
+    "HtmlCanvasElement",
+    "HtmlButtonElement",
+    "HtmlInputElement",
+    "HtmlSelectElement",
+    "HtmlElement",
+    "Location",
+    "MessageEvent",
+    "Storage",
+    "WebSocket",
+    "Window",
+] }
+
+
+el_client = { path = "../../crates/el_client", default-features = false }
+

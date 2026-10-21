@@ -1,0 +1,40 @@
+
+pub trait Recyclable {
+    fn recycle(self) -> Self;
+}
+
+
+impl<T> Recyclable for Vec<T> {
+    fn recycle(mut self) -> Self {
+        self.clear();
+        self
+    }
+}
+
+impl<K, V, S: Clone> Recyclable for std::collections::HashMap<K, V, S> {
+    fn recycle(mut self) -> Self {
+        self.clear();
+        self
+    }
+}
+
+impl<K, S: Clone> Recyclable for std::collections::HashSet<K, S> {
+    fn recycle(mut self) -> Self {
+        self.clear();
+        self
+    }
+}
+
+impl<K, S: Clone> Recyclable for indexmap::IndexSet<K, S> {
+    fn recycle(mut self) -> Self {
+        self.clear();
+        self
+    }
+}
+
+impl<K: Ord, V> Recyclable for std::collections::BTreeMap<K, V> {
+    fn recycle(mut self) -> Self {
+        self.clear();
+        self
+    }
+}

@@ -1,0 +1,207 @@
+#![allow(dead_code)]                                                       
+
+#[cfg(feature = "dot-out")]
+pub mod dot;
+#[cfg(feature = "glsl-out")]
+pub mod glsl;
+#[cfg(feature = "hlsl-out")]
+pub mod hlsl;
+#[cfg(feature = "msl-out")]
+pub mod msl;
+#[cfg(feature = "spv-out")]
+pub mod spv;
+#[cfg(feature = "wgsl-out")]
+pub mod wgsl;
+
+const COMPONENTS: &[char] = &['x', 'y', 'z', 'w'];
+const INDENT: &str = "    ";
+const BAKE_PREFIX: &str = "_e";
+
+type NeedBakeExpressions = crate::FastHashSet<crate::Handle<crate::Expression>>;
+
+#[derive(Clone, Copy)]
+struct Level(usize);
+
+impl Level {
+    const fn next(&self) -> Self {
+        Level(self.0 + 1)
+    }
+}
+
+impl std::fmt::Display for Level {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        (0..self.0).try_for_each(|_| formatter.write_str(INDENT))
+    }
+}
+
+enum FunctionType {
+    Function(crate::Handle<crate::Function>),
+    EntryPoint(crate::proc::EntryPointIndex),
+}
+
+impl FunctionType {
+    fn is_compute_entry_point(&self, module: &crate::Module) -> bool {
+        match *self {
+            FunctionType::EntryPoint(index) => {
+                module.entry_points[index as usize].stage == crate::ShaderStage::Compute
+            }
+            FunctionType::Function(_) => false,
+        }
+    }
+}
+
+struct FunctionCtx<'a> {
+    ty: FunctionType,
+    info: &'a crate::valid::FunctionInfo,
+    expressions: &'a crate::Arena<crate::Expression>,
+    named_expressions: &'a crate::NamedExpressions,
+}
+
+impl FunctionCtx<'_> {
+    fn resolve_type<'a>(
+        &'a self,
+        handle: crate::Handle<crate::Expression>,
+        types: &'a crate::UniqueArena<crate::Type>,
+    ) -> &'a crate::TypeInner {
+        self.info[handle].ty.inner_with(types)
+    }
+
+    const fn name_key(&self, local: crate::Handle<crate::LocalVariable>) -> crate::proc::NameKey {
+        match self.ty {
+            FunctionType::Function(handle) => crate::proc::NameKey::FunctionLocal(handle, local),
+            FunctionType::EntryPoint(idx) => crate::proc::NameKey::EntryPointLocal(idx, local),
+        }
+    }
+
+    const fn argument_key(&self, arg: u32) -> crate::proc::NameKey {
+        match self.ty {
+            FunctionType::Function(handle) => crate::proc::NameKey::FunctionArgument(handle, arg),
+            FunctionType::EntryPoint(ep_index) => {
+                crate::proc::NameKey::EntryPointArgument(ep_index, arg)
+            }
+        }
+    }
+
+    fn is_fixed_function_input(
+        &self,
+        mut expression: crate::Handle<crate::Expression>,
+        module: &crate::Module,
+    ) -> Option<crate::BuiltIn> {
+        let ep_function = match self.ty {
+            FunctionType::Function(_) => return None,
+            FunctionType::EntryPoint(ep_index) => &module.entry_points[ep_index as usize].function,
+        };
+        let mut built_in = None;
+        loop {
+            match self.expressions[expression] {
+                crate::Expression::FunctionArgument(arg_index) => {
+                    return match ep_function.arguments[arg_index as usize].binding {
+                        Some(crate::Binding::BuiltIn(bi)) => Some(bi),
+                        _ => built_in,
+                    };
+                }
+                crate::Expression::AccessIndex { base, index } => {
+                    match *self.resolve_type(base, &module.types) {
+                        crate::TypeInner::Struct { ref members, .. } => {
+                            if let Some(crate::Binding::BuiltIn(bi)) =
+                                members[index as usize].binding
+                            {
+                                built_in = Some(bi);
+                            }
+                        }
+                        _ => return None,
+                    }
+                    expression = base;
+                }
+                _ => return None,
+            }
+        }
+    }
+}
+
+impl crate::Expression {
+    const fn bake_ref_count(&self) -> usize {
+        match *self {
+            crate::Expression::Access { .. } | crate::Expression::AccessIndex { .. } => usize::MAX,
+            crate::Expression::ImageSample { .. } | crate::Expression::ImageLoad { .. } => 1,
+            crate::Expression::Derivative { .. } => 1,
+            crate::Expression::Load { .. } => 1,
+            _ => 2,
+        }
+    }
+}
+
+const fn binary_operation_str(op: crate::BinaryOperator) -> &'static str {
+    use crate::BinaryOperator as Bo;
+    match op {
+        Bo::Add => "+",
+        Bo::Subtract => "-",
+        Bo::Multiply => "*",
+        Bo::Divide => "/",
+        Bo::Modulo => "%",
+        Bo::Equal => "==",
+        Bo::NotEqual => "!=",
+        Bo::Less => "<",
+        Bo::LessEqual => "<=",
+        Bo::Greater => ">",
+        Bo::GreaterEqual => ">=",
+        Bo::And => "&",
+        Bo::ExclusiveOr => "^",
+        Bo::InclusiveOr => "|",
+        Bo::LogicalAnd => "&&",
+        Bo::LogicalOr => "||",
+        Bo::ShiftLeft => "<<",
+        Bo::ShiftRight => ">>",
+    }
+}
+
+const fn vector_size_str(size: crate::VectorSize) -> &'static str {
+    match size {
+        crate::VectorSize::Bi => "2",
+        crate::VectorSize::Tri => "3",
+        crate::VectorSize::Quad => "4",
+    }
+}
+
+impl crate::TypeInner {
+    const fn is_handle(&self) -> bool {
+        match *self {
+            crate::TypeInner::Image { .. } | crate::TypeInner::Sampler { .. } => true,
+            _ => false,
+        }
+    }
+}
+
+impl crate::Statement {
+    pub const fn is_terminator(&self) -> bool {
+        match *self {
+            crate::Statement::Break
+            | crate::Statement::Continue
+            | crate::Statement::Return { .. }
+            | crate::Statement::Kill => true,
+            _ => false,
+        }
+    }
+}
+
+bitflags::bitflags! {
+    #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+    pub struct RayFlag: u32 {
+        const OPAQUE = 0x01;
+        const NO_OPAQUE = 0x02;
+        const TERMINATE_ON_FIRST_HIT = 0x04;
+        const SKIP_CLOSEST_HIT_SHADER = 0x08;
+        const CULL_BACK_FACING = 0x10;
+        const CULL_FRONT_FACING = 0x20;
+        const CULL_OPAQUE = 0x40;
+        const CULL_NO_OPAQUE = 0x80;
+        const SKIP_TRIANGLES = 0x100;
+        const SKIP_AABBS = 0x200;
+    }
+}
+
+#[repr(u32)]
+enum RayIntersectionType {
+    Triangle = 1,
+    BoundingBox = 4,
+}

@@ -1,0 +1,15 @@
+[package]
+name = "el_transport"
+version = "0.1.0"
+edition = "2024"
+description = "Platform transport adapters and byte-stream primitives for Eltharn"
+license.workspace = true
+
+[dependencies]
+
+
+el_platform_api = { path = "../el_platform_api", version = "0.1.0" }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+
+tokio = { version = "1", features = ["io-util", "net"] }
