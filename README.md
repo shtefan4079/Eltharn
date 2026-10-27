@@ -3,8 +3,7 @@
 A Rust Minecraft-compatible client with the Eltharn Gate launcher.
 **Pre-alpha: the project is unfinished.**
 
-The project applies clean-room principles by keeping Minecraft reference
-materials separate from the distributed Rust implementation. Third-party code
+Third-party code
 retains its original licenses.
 
 ## Build
